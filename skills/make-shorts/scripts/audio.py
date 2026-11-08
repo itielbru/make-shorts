@@ -36,6 +36,17 @@ def extract_audio(video: Path, out: Path) -> Path:
     return out
 
 
+def probe_duration(path: Path) -> float:
+    result = run_text(
+        ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(path)],
+        timeout=30,
+    )
+    try:
+        return float(result.stdout.strip())
+    except ValueError:
+        raise UserFacingError("unknown", detail="could not read media duration") from None
+
+
 def plan_chunks(total_bytes: int, duration_s: float, max_bytes: int) -> list[tuple[float, float]]:
     """Equal-duration chunks; the last one ends exactly at duration_s."""
     n = max(1, math.ceil(total_bytes / max_bytes))

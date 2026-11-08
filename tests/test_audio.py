@@ -57,6 +57,11 @@ def test_split_audio_writes_one_file_per_chunk(synthetic_video, tmp_path):
     assert 4.5 < float(probe.stdout.strip()) < 5.6
 
 
+def test_probe_duration_matches_synthetic_audio(synthetic_video, tmp_path):
+    full = audio.extract_audio(synthetic_video, tmp_path / "audio.mp3")
+    assert 9.5 < audio.probe_duration(full) < 10.6
+
+
 def test_shift_words_rounds_to_6_decimals():
     shifted = audio.shift_words([Word("שלום", 0.1234567, 0.7654321)], 10.0)
     assert shifted == [Word("שלום", 10.123457, 10.765432)]

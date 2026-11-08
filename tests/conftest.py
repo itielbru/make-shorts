@@ -23,12 +23,15 @@ def hebrew_tmp(tmp_path) -> Path:
     return d
 
 
-@pytest.fixture
-def synthetic_video(tmp_path) -> Path:
-    """10 s, 1920x1080 test pattern with a sine tone. Skipped without ffmpeg."""
+@pytest.fixture(scope="session")
+def synthetic_video(tmp_path_factory) -> Path:
+    """10 s, 1920x1080 test pattern with a sine tone, built once per session.
+
+    Read-only for tests. Skipped without ffmpeg.
+    """
     if shutil.which("ffmpeg") is None:
         pytest.skip("ffmpeg not available")
-    out = tmp_path / "synthetic.mp4"
+    out = tmp_path_factory.mktemp("synthetic") / "synthetic.mp4"
     cmd = [
         "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
         "-f", "lavfi", "-i", "testsrc=size=1920x1080:rate=30",

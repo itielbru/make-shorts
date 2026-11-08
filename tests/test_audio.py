@@ -1,5 +1,7 @@
 import subprocess
 
+import pytest
+
 import audio
 from transcript import Word
 
@@ -65,3 +67,24 @@ def test_probe_duration_matches_synthetic_audio(synthetic_video, tmp_path):
 def test_shift_words_rounds_to_6_decimals():
     shifted = audio.shift_words([Word("שלום", 0.1234567, 0.7654321)], 10.0)
     assert shifted == [Word("שלום", 10.123457, 10.765432)]
+
+
+def test_detect_silences_finds_the_quiet_stretch(tmp_path):
+    out = tmp_path / "gap.mp3"
+    subprocess.run(
+        ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+         "-f", "lavfi", "-t", "3", "-i", "sine=frequency=440:sample_rate=16000",
+         "-f", "lavfi", "-t", "2", "-i", "anullsrc=r=16000:cl=mono",
+         "-f", "lavfi", "-t", "3", "-i", "sine=frequency=440:sample_rate=16000",
+         "-filter_complex", "[0:a][1:a][2:a]concat=n=3:v=0:a=1[a]", "-map", "[a]", str(out)],
+        check=True,
+    )
+    silences = audio.detect_silences(out)
+    assert len(silences) == 1
+    assert silences[0][0] == pytest.approx(3.0, abs=0.15)
+    assert silences[0][1] == pytest.approx(5.0, abs=0.15)
+
+
+def test_detect_silences_on_continuous_tone_is_empty(synthetic_video, tmp_path):
+    full = audio.extract_audio(synthetic_video, tmp_path / "a.mp3")
+    assert audio.detect_silences(full) == []

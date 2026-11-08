@@ -21,6 +21,10 @@ def _config_dir() -> Path:
     return Path.home() / ".config" / "make-shorts"
 
 
+def config_dir() -> Path:
+    return _config_dir()
+
+
 CONFIG_DIR = _config_dir()
 
 

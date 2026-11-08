@@ -61,3 +61,7 @@ def test_load_secret_reads_environment_first(config_home, monkeypatch):
     assert config.load_secret("GROQ_API_KEY") == "file-key"
     monkeypatch.setenv("GROQ_API_KEY", "env-key")
     assert config.load_secret("GROQ_API_KEY") == "env-key"
+
+
+def test_config_dir_follows_the_current_home(config_home):
+    assert config.config_dir() == config_home / ".config" / "make-shorts"

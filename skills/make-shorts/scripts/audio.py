@@ -6,6 +6,7 @@ minute) and long recordings are cut into equal-duration chunks.
 from __future__ import annotations
 
 import math
+import re
 from pathlib import Path
 
 from messages import UserFacingError
@@ -45,6 +46,20 @@ def probe_duration(path: Path) -> float:
         return float(result.stdout.strip())
     except ValueError:
         raise UserFacingError("unknown", detail="could not read media duration") from None
+
+
+def detect_silences(path: Path, noise_db: int = -35, min_s: float = 0.3) -> list[tuple[float, float]]:
+    """Silent stretches as (start, end) seconds; a silence that runs to the end ends at the file's end."""
+    result = run_text(
+        ["ffmpeg", "-hide_banner", "-nostats", "-loglevel", "info", "-i", str(path),
+         "-af", f"silencedetect=n={noise_db}dB:d={min_s}", "-f", "null", "-"],
+        timeout=1800,
+    )
+    starts = [max(0.0, float(x)) for x in re.findall(r"silence_start:\s*(-?[0-9.]+)", result.stderr)]
+    ends = [float(x) for x in re.findall(r"silence_end:\s*(-?[0-9.]+)", result.stderr)]
+    if len(ends) < len(starts):
+        ends.append(probe_duration(path))
+    return [(round(s, 3), round(e, 3)) for s, e in zip(starts, ends)]
 
 
 def plan_chunks(total_bytes: int, duration_s: float, max_bytes: int) -> list[tuple[float, float]]:

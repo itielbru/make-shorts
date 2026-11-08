@@ -11,10 +11,11 @@ import json
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from captions import PRESETS
 from messages import UserFacingError
 
 HOOK_MODES = ("none", "title", "teaser", "reorder")
-CAPTION_PRESETS = ("bold", "clean", "boxed")
+CAPTION_PRESETS = tuple(PRESETS)
 ENGINES = ("auto", "groq", "ivrit_local", "elevenlabs")
 TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "profiles"
 

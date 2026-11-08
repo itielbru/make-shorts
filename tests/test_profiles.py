@@ -78,3 +78,7 @@ def test_unknown_field_in_file_rejected(tmp_path):
     with pytest.raises(UserFacingError) as exc:
         profiles.load_profile(path)
     assert exc.value.key == "bad_profile"
+
+
+def test_plain_caption_preset_is_valid():
+    profiles.validate(dataclasses.replace(profiles.load_template("podcaster"), caption_preset="plain"))

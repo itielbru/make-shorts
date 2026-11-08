@@ -32,16 +32,18 @@ WORDS = [
 class FakeEngine:
     name = "groq"
 
-    def __init__(self, error=None):
+    def __init__(self, error=None, gaps=None, words=None):
         self.calls = 0
         self.error = error
+        self.gaps = gaps or []
+        self.words = WORDS if words is None else words
 
     def transcribe(self, audio, *, language, progress):
         self.calls += 1
         progress("מתמלל...")
         if self.error:
             raise self.error
-        return Transcript(words=list(WORDS), language=language, engine="groq")
+        return Transcript(words=list(self.words), language=language, engine="groq", gaps=list(self.gaps))
 
 
 def run(capsys, *argv):
@@ -354,3 +356,88 @@ def test_render_reports_when_the_source_video_is_gone(refined, capsys):
 def transcript_mod_load(path):
     import transcript as transcript_mod
     return transcript_mod.load_transcript(Path(path))
+
+
+# ---------------------------------------------------------------- review fixes
+
+def test_second_refine_clears_rendered_state_so_qa_cannot_reuse_old_videos(refined, tmp_path, capsys):
+    run(capsys, "render", "--project", refined, "--clips", "1", "--reframe", "center")
+    write_picks(tmp_path, [pick(10, 15, "סיום")])
+    assert run(capsys, "refine", "--project", refined, "--picks", tmp_path / "picks.json", "--min-s", 1, "--max-s", 8)[0] == 0
+    code, _, err = run(capsys, "qa", "--project", refined)
+    assert code == 2 and HEBREW.search(err)
+
+
+def test_render_replaces_the_older_file_for_the_same_clip_number(refined, tmp_path, capsys):
+    run(capsys, "render", "--project", refined, "--clips", "1", "--reframe", "center")
+    write_picks(tmp_path, [pick(10, 15, "סיום")])
+    run(capsys, "refine", "--project", refined, "--picks", tmp_path / "picks.json", "--min-s", 1, "--max-s", 8)
+    run(capsys, "render", "--project", refined, "--clips", "1", "--reframe", "center")
+    names = [p.name for p in (refined / "clips").iterdir() if p.name.startswith("01 -")]
+    assert names and all("סיום" in n for n in names)
+
+
+def test_transcript_is_saved_even_if_silence_detection_fails(
+    profile_ready, fake_engine, synthetic_video, project, capsys, monkeypatch
+):
+    profile_ready()
+    run(capsys, "ingest", synthetic_video, "--project", project)
+    real = make_shorts.audio_mod.detect_silences
+
+    def broken(*args, **kwargs):
+        raise UserFacingError("timed_out", program="ffmpeg")
+
+    monkeypatch.setattr(make_shorts.audio_mod, "detect_silences", broken)
+    code, out, _ = run(capsys, "transcribe", "--project", project)
+    assert code == 0 and "ראיות חסרות" in out
+    assert list((project / "transcripts").glob("*.json"))
+    monkeypatch.setattr(make_shorts.audio_mod, "detect_silences", real)
+    assert run(capsys, "transcribe", "--project", project)[0] == 0
+    assert fake_engine.calls == 1  # the saved transcript was reused, no second upload
+
+
+def test_transcript_with_gaps_is_not_reused_from_cache(profile_ready, fake_engine, synthetic_video, project, capsys):
+    profile_ready()
+    run(capsys, "ingest", synthetic_video, "--project", project)
+    fake_engine.gaps = [(5.0, 10.0)]
+    _, out, _ = run(capsys, "transcribe", "--project", project)
+    assert "ראיות חסרות" in out and fake_engine.calls == 1
+    fake_engine.gaps = []
+    _, out, _ = run(capsys, "transcribe", "--project", project)
+    assert fake_engine.calls == 2 and "ראיות חסרות" not in out
+    run(capsys, "transcribe", "--project", project)
+    assert fake_engine.calls == 2
+
+
+def test_force_flag_retranscribes_even_with_a_good_cache(profile_ready, fake_engine, synthetic_video, project, capsys):
+    profile_ready()
+    run(capsys, "ingest", synthetic_video, "--project", project)
+    run(capsys, "transcribe", "--project", project)
+    run(capsys, "transcribe", "--project", project, "--force")
+    assert fake_engine.calls == 2
+
+
+def test_render_with_an_empty_media_path_says_to_ingest_again(refined, capsys):
+    state_path = refined / "process_config.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["media_path"] = ""
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    code, _, err = run(capsys, "render", "--project", refined)
+    assert code == 2 and "ingest" in err
+
+
+def test_a_video_with_no_speech_is_reported_plainly(profile_ready, fake_engine, synthetic_video, project, capsys):
+    profile_ready()
+    fake_engine.words = []
+    run(capsys, "ingest", synthetic_video, "--project", project)
+    code, out, _ = run(capsys, "transcribe", "--project", project)
+    assert code == 1 and "ראיות חסרות" in out and "דיבור" in out
+    code, out, _ = run(capsys, "windows", "--project", project)
+    assert "אין חלונות" in out
+
+
+def test_setup_json_says_whether_a_profile_exists(config_home, monkeypatch, capsys, profile_ready):
+    patch_env(monkeypatch)
+    assert json.loads(run(capsys, "setup", "--json", "--skip-selftest")[1])["profile_exists"] is False
+    profile_ready()
+    assert json.loads(run(capsys, "setup", "--json", "--skip-selftest")[1])["profile_exists"] is True

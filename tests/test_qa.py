@@ -148,3 +148,9 @@ def test_preview_frames_returns_ascending_frames_within_the_cap(synthetic_video,
     assert [f.t for f in frames] == sorted(f.t for f in frames)
     assert all(f.path.exists() for f in frames)
     assert len(list((tmp_path / "prev").glob("*.jpg"))) == len(frames)
+
+
+def test_frame_times_past_the_end_are_clamped_instead_of_failing(synthetic_video, tmp_path):
+    frames = qa.extract_frames(synthetic_video, [3.0, 15.0], tmp_path / "f")
+    assert len(frames) == 2
+    assert frames[1].t <= 10.0 + 0.05

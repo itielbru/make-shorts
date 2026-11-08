@@ -81,17 +81,18 @@ def test_no_discrete_gpu_and_cloud_allowed_recommends_groq():
     assert advice.reason_he
 
 
-def test_no_discrete_gpu_and_cloud_denied_recommends_local_with_slow_warning():
+def test_cloud_denied_recommends_no_engine_because_local_does_not_exist_yet():
     hw = setup_env.Hardware("cpu", 10, 16.0, False)
     advice = setup_env.recommend_engine(hw, cloud_allowed=False)
-    assert advice.engine == "ivrit_local"
-    assert advice.warn_slow_local is True
+    assert advice.engine == "none"
+    assert advice.warn_slow_local is False
+    assert "עוד לא זמין" in advice.reason_he
 
 
-def test_discrete_gpu_recommends_local_without_slow_warning():
+def test_a_discrete_gpu_still_gets_an_engine_that_exists_in_this_version():
     hw = setup_env.Hardware("cpu", 16, 32.0, True)
     advice = setup_env.recommend_engine(hw, cloud_allowed=True)
-    assert advice.engine == "ivrit_local"
+    assert advice.engine in setup_env.AVAILABLE_ENGINES
     assert advice.warn_slow_local is False
 
 

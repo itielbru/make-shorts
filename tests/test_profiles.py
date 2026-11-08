@@ -82,3 +82,20 @@ def test_unknown_field_in_file_rejected(tmp_path):
 
 def test_plain_caption_preset_is_valid():
     profiles.validate(dataclasses.replace(profiles.load_template("podcaster"), caption_preset="plain"))
+
+
+def test_unknown_font_name_is_rejected_when_the_profile_is_checked():
+    base = profiles.load_template("podcaster")
+    with pytest.raises(UserFacingError) as exc:
+        profiles.validate(dataclasses.replace(base, font="Heebo"))
+    assert exc.value.key == "bad_profile"
+    profiles.validate(dataclasses.replace(base, font="rubik"))
+
+
+def test_language_must_be_a_short_language_code():
+    base = profiles.load_template("podcaster")
+    for bad in ("other", "עברית", "Hebrew", ""):
+        with pytest.raises(UserFacingError):
+            profiles.validate(dataclasses.replace(base, language=bad))
+    for good in ("he", "en", "ar"):
+        profiles.validate(dataclasses.replace(base, language=good))

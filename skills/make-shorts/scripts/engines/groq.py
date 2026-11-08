@@ -26,6 +26,7 @@ MODEL = "whisper-large-v3"
 USER_AGENT = "make-shorts/1.0 (+claude-code; python-urllib)"
 MAX_ATTEMPTS = 4
 MAX_429_RETRIES = 2
+MAX_RETRY_AFTER_S = 120  # a longer wait means the daily quota is used up
 
 
 _EDGE = re.compile(r"^[\W_]+|[\W_]+$")
@@ -168,8 +169,11 @@ class GroqEngine:
                 if code == 401:
                     raise UserFacingError("api_key_rejected", provider="Groq") from None
                 if code == 429 and retries_429 < MAX_429_RETRIES and attempt < MAX_ATTEMPTS - 1:
+                    wait = self._retry_after(err)
+                    if wait > MAX_RETRY_AFTER_S:
+                        raise _ChunkFailed("המכסה של Groq מלאה כרגע, כדאי לנסות שוב מאוחר יותר") from None
                     retries_429 += 1
-                    self.sleep(self._retry_after(err))
+                    self.sleep(wait)
                     continue
                 if 500 <= code < 600 and attempt < MAX_ATTEMPTS - 1:
                     self.sleep(2.0 * 2**attempt)

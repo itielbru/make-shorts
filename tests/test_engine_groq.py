@@ -238,3 +238,13 @@ def test_punctuation_merge_leaves_words_alone_when_segment_text_does_not_match(f
     })]
     t = transcribe(make_engine(fake, []), audio_file)
     assert [w.text for w in t.words] == ["אחת", "שתיים"]
+
+
+def test_a_huge_retry_after_fails_the_chunk_instead_of_hanging(fake, audio_file):
+    fake.script = [(429, {"Retry-After": "3600"}, b"{}")]
+    sleeps = []
+    with pytest.raises(UserFacingError) as exc:
+        transcribe(make_engine(fake, sleeps), audio_file)
+    assert exc.value.key == "transcription_failed"
+    assert sleeps == [] and len(fake.requests) == 1
+    assert "מכסה" in exc.value.message_he

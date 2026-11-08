@@ -8,10 +8,11 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from captions import PRESETS
+from captions import FONTS, PRESETS
 from messages import UserFacingError
 
 HOOK_MODES = ("none", "title", "teaser", "reorder")
@@ -48,16 +49,16 @@ def _bad(reason: str) -> UserFacingError:
 def validate(p: Profile) -> None:
     if not p.name:
         raise _bad("חסר שם")
-    if not p.language:
-        raise _bad("חסרה שפה")
+    if not re.fullmatch(r"[a-z]{2,3}", p.language or ""):
+        raise _bad("השפה צריכה להיות קוד קצר באותיות קטנות, למשל he או en")
     if p.hook_default not in HOOK_MODES:
         raise _bad(f"סוג פתיח לא מוכר ({p.hook_default})")
     if p.caption_preset not in CAPTION_PRESETS:
         raise _bad(f"סגנון כתוביות לא מוכר ({p.caption_preset})")
     if p.engine not in ENGINES:
         raise _bad(f"מנוע תמלול לא מוכר ({p.engine})")
-    if not p.font:
-        raise _bad("חסר פונט")
+    if p.font not in FONTS:
+        raise _bad(f"פונט לא מוכר ({p.font}). האפשרויות: " + ", ".join(FONTS))
     if p.min_s <= 0 or p.max_s < p.min_s:
         raise _bad("אורך הקליפ המרבי חייב להיות גדול מהמינימלי")
 

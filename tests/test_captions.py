@@ -159,3 +159,12 @@ def test_plain_preset_has_no_outline_and_keeps_a_soft_shadow():
     assert fields[15] == "1"         # BorderStyle: outline mode
     assert fields[16] == "0"         # Outline width 0: no black line around the letters
     assert int(fields[17]) > 0       # soft shadow so white text stays readable
+
+
+def test_srt_has_numbered_entries_with_comma_milliseconds_and_hebrew_text():
+    blocks = captions.group_words(words("שלום", "עולם", "יפה", "מאוד"), 3)
+    srt = captions.build_srt(blocks)
+    lines = srt.strip().splitlines()
+    assert lines[0] == "1" and lines[1] == "00:00:00,000 --> 00:00:01,500" and lines[2] == "שלום עולם יפה"
+    assert "2" in lines and "מאוד" in lines
+    assert srt.endswith("\n")

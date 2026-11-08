@@ -46,8 +46,10 @@ def caption_cue_times(blocks: list[Block]) -> list[float]:
 def extract_frames(video: Path, times: list[float], out_dir: Path, reason: str = "כתובית") -> list[Frame]:
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
+    limit = max(0.0, probe_duration(video) - 0.1)
     frames: list[Frame] = []
     for i, t in enumerate(times):
+        t = min(t, limit)
         out = out_dir / f"frame_{i:02d}.png"
         result = run_text(
             ["ffmpeg", "-hide_banner", "-loglevel", "info", "-y", "-ss", f"{t:.3f}", "-copyts",

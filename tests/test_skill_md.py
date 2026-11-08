@@ -109,3 +109,9 @@ def test_marketplace_lists_plugin_make_shorts():
     plugin = json.loads((ROOT / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))
     assert plugin["name"] == "make-shorts"
     assert (SKILL / "SKILL.md").exists()
+
+
+def test_skill_md_explains_the_json_fields_and_commands_claude_depends_on():
+    text = skill_text()
+    for needed in ("url_input_ready", "profile_exists", "correct", "winget upgrade --id yt-dlp.yt-dlp", "--force"):
+        assert needed in text, needed

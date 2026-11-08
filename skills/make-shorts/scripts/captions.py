@@ -177,6 +177,23 @@ def build_ass(
     return "\n".join(lines) + "\n"
 
 
+def _srt_ts(seconds: float) -> str:
+    ms = max(0, round(seconds * 1000))
+    h, rem = divmod(ms, 3_600_000)
+    m, rem = divmod(rem, 60_000)
+    s, ms = divmod(rem, 1000)
+    return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
+
+
+def build_srt(blocks: list[Block]) -> str:
+    """The same caption blocks as plain SRT, for editors and platforms that take a subtitle file."""
+    entries = [
+        f"{i}\n{_srt_ts(b.start)} --> {_srt_ts(b.end)}\n{' '.join(w.text for w in b.words)}\n"
+        for i, b in enumerate(blocks, start=1)
+    ]
+    return "\n".join(entries)
+
+
 def selftest_sentence() -> str:
     return "זה מבחן: בדיקה 123 עם word באנגלית, וגם צה״ל, ג׳ירפה ומקף־עברי."
 

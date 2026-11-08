@@ -124,25 +124,30 @@ def detect_hardware(
     return Hardware("unknown", os.cpu_count() or 1, ram_gb, shutil.which("nvidia-smi") is not None)
 
 
+AVAILABLE_ENGINES = ("groq",)  # the local and ElevenLabs engines are deferred
+
+
 def recommend_engine(hw: Hardware, cloud_allowed: bool) -> EngineAdvice:
-    if hw.has_discrete_gpu:
+    """Only recommends an engine that exists in this version."""
+    if not cloud_allowed:
         return EngineAdvice(
-            "ivrit_local",
-            "יש במחשב שלך כרטיס מסך נפרד, ולכן תמלול מקומי מהיר, פרטי וחינמי, והוא הכי מותאם לעברית.",
+            "none",
+            "בחרת לא לשלוח אודיו החוצה, ותמלול מקומי עוד לא זמין בגרסה הזו. "
+            "כדי להמשיך צריך לאשר שליחה ל-Groq, או להמתין לתמלול מקומי.",
             False,
         )
-    if cloud_allowed:
+    if hw.has_discrete_gpu:
         return EngineAdvice(
             "groq",
-            "במחשב שלך אין כרטיס מסך נפרד, ולכן תמלול מקומי יהיה איטי. "
-            "Groq מהיר וחינמי (עם מגבלות), אבל האודיו נשלח אליהם, ולכן נדרשת הסכמה שלך.",
+            "יש במחשב שלך כרטיס מסך נפרד, ותמלול מקומי יהיה מהיר כשיתווסף. "
+            "בינתיים Groq הוא האפשרות היחידה, והאודיו נשלח אליהם, ולכן נדרשת הסכמה שלך.",
             False,
         )
     return EngineAdvice(
-        "ivrit_local",
-        "בחרת לא לשלוח אודיו החוצה, ולכן התמלול ירוץ על המחשב. "
-        "בלי כרטיס מסך נפרד זה יכול לקחת הרבה זמן להקלטה ארוכה.",
-        True,
+        "groq",
+        "במחשב שלך אין כרטיס מסך נפרד, ולכן תמלול מקומי יהיה איטי. "
+        "Groq מהיר וחינמי (עם מגבלות), אבל האודיו נשלח אליהם, ולכן נדרשת הסכמה שלך.",
+        False,
     )
 
 

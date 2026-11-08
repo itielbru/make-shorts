@@ -172,6 +172,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
         config.write_settings({"SETUP_COMPLETE": "true"})
 
     status = setup_env.status_json(env, hw, advice, first_run=setup_env.is_first_run())
+    status["profile_exists"] = (config.config_dir() / "profile.json").exists()
     selftest = None
     if status["can_proceed"] and not args.skip_selftest:
         progress("בודק שהכתוביות העבריות מצטיירות נכון...")
@@ -255,36 +256,54 @@ def cmd_transcribe(args: argparse.Namespace) -> int:
     tpath, spath = tdir / f"{key}.json", tdir / f"{key}.silences.json"
 
     report = Report("התמלול")
-    if tpath.exists() and spath.exists():
+    cached = None
+    if tpath.exists() and not args.force:
+        cached = transcript_mod.load_transcript(tpath)
+        if cached.gaps:
+            progress("בתמלול השמור חסרים חלקים. מתמלל מחדש כדי להשלים אותם.")
+            cached = None
+
+    if cached is not None and spath.exists():
         progress("משתמש בתמלול שמור מהרצה קודמת.")
-        t = transcript_mod.load_transcript(tpath)
+        t = cached
     else:
         ws = _workspace(state)
         audio_path = ws.path / "audio.mp3"
         if not audio_path.exists():
             progress("מחלץ את האודיו מהסרטון...")
             audio_mod.extract_audio(media, audio_path)
-        if tpath.exists():
-            t = transcript_mod.load_transcript(tpath)
+        if cached is not None:
+            t = cached
         else:
             engine = engines.get_engine(name)
             t = engine.transcribe(audio_path, language=profile.language, progress=progress)
-        progress("מזהה שתיקות...")
-        silences = audio_mod.detect_silences(audio_path)
-        t.words = transcript_mod.drop_words_in_trailing_silence(
-            t.words, silences, audio_mod.probe_duration(audio_path)
-        )
-        transcript_mod.save_transcript(t, tpath)
-        spath.write_text(json.dumps(silences), encoding="utf-8")
+            transcript_mod.save_transcript(t, tpath)  # saved at once: an upload is expensive to repeat
+        try:
+            progress("מזהה שתיקות...")
+            silences = audio_mod.detect_silences(audio_path)
+            t.words = transcript_mod.drop_words_in_trailing_silence(
+                t.words, silences, audio_mod.probe_duration(audio_path)
+            )
+            transcript_mod.save_transcript(t, tpath)
+            spath.write_text(json.dumps(silences), encoding="utf-8")
+        except UserFacingError as err:
+            report.missing(
+                f"לא הצלחתי לזהות שתיקות ({err.message_he}). אפשר להמשיך, אבל החיתוכים יהיו פחות מדויקים."
+            )
 
-    state.engine, state.transcript_path, state.silences_path = name, str(tpath), str(spath)
+    state.engine, state.transcript_path = name, str(tpath)
+    state.silences_path = str(spath) if spath.exists() else ""
     state.save()
     report.bullet(f"מנוע: {name}, שפה: {profile.language}")
     report.bullet(f"מילים: {len(t.words)}")
     if t.approximate_timing:
         report.missing("תזמון המילים משוער (המנוע החזיר רק זמנים לקטעים), ולכן החיתוכים והכתוביות פחות מדויקים.")
-    for start, end in t.gaps:
-        report.missing(f"לא תומלל החלק שבין {mmss(start)} ל-{mmss(end)}.")
+    for start_s, end_s in t.gaps:
+        report.missing(f"לא תומלל החלק שבין {mmss(start_s)} ל-{mmss(end_s)}. הרצה חוזרת של transcribe תנסה להשלים אותו.")
+    if not t.words:
+        report.missing("לא זוהה דיבור בסרטון (אולי יש בו רק מוזיקה או שקט), ולכן אין ממה לבחור קטעים. כדאי לנסות סרטון אחר.")
+        print(report.markdown())
+        return 1
     print(report.markdown())
     return 0
 
@@ -296,6 +315,8 @@ def cmd_windows(args: argparse.Namespace) -> int:
     page = windows[args.start_window : args.start_window + args.count]
     report = Report("חלונות לדירוג")
     report.bullet(f"סה\"כ חלונות: {len(windows)}. יעד לרשימה הקצרה: {selection.shortlist_target(state.media_duration)}")
+    if not windows:
+        report.bullet("אין חלונות: בתמלול אין מילים, ולכן אין ממה לבחור.")
     for w in page:
         text = selection.render_indexed_transcript(t, w.start_word, w.end_word)
         report.section(
@@ -343,6 +364,7 @@ def cmd_refine(args: argparse.Namespace) -> int:
     floor, ceiling = selection.clip_count_targets(len(picks))
     clips = selection.dedupe_and_trim(clips, ceiling)
     state.clips = [{"id": i, **dataclasses.asdict(c)} for i, c in enumerate(clips, start=1)]
+    state.rendered = {}  # numbers now mean different clips; old renders must not be reused
     state.save()
 
     report = Report("הקטעים שנבחרו")
@@ -410,6 +432,8 @@ def cmd_render(args: argparse.Namespace) -> int:
     state = ProjectState.load(project)
     if not state.clips:
         raise UserFacingError("no_clips")
+    if not state.media_path:
+        raise UserFacingError("no_media")
     if not Path(state.media_path).exists():
         raise UserFacingError("media_missing")
     t = _load_transcript(state)
@@ -426,6 +450,8 @@ def cmd_render(args: argparse.Namespace) -> int:
             continue
         clip, clip_id = _clip_from(entry), entry["id"]
         progress(f"מרנדר קליפ {clip_id}: {clip.title}...")
+        for old in out_dir.glob(f"{clip_id:02d} - *"):  # drop files from an earlier selection
+            old.unlink(missing_ok=True)
         try:
             plan = plan_hook(clip, t, hook_overrides.get(clip_id, default_hook))
             final = render.render_clip(
@@ -525,6 +551,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = add("transcribe", cmd_transcribe)
     p.add_argument("--engine")
+    p.add_argument("--force", action="store_true", help="לתמלל מחדש גם אם יש תמלול שמור")
 
     p = add("windows", cmd_windows)
     p.add_argument("--start-window", type=int, default=0)

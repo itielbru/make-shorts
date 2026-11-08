@@ -130,3 +130,11 @@ def test_workspace_is_left_clean_of_intermediates_names_but_not_deleted(syntheti
         preset="clean", reframe="center", out_dir=tmp_path, title="x", index=2,
     )
     assert ws.path.exists()  # the CLI deletes it at the end of the run, not each render
+
+
+def test_render_writes_an_srt_next_to_the_clip(synthetic_video, tmp_path):
+    out = do_render(synthetic_video, tmp_path)
+    srt = out.with_suffix(".srt")
+    assert srt.exists()
+    text = srt.read_text(encoding="utf-8")
+    assert "-->" in text and "שלום" in text

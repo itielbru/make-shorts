@@ -11,7 +11,7 @@ import shutil
 from pathlib import Path
 from typing import Literal
 
-from captions import FONTS, SKILL_ROOT, build_ass, group_words, remap_words
+from captions import FONTS, SKILL_ROOT, build_ass, build_srt, group_words, remap_words
 from hooks import HookPlan
 from messages import UserFacingError
 from runtime import run_text
@@ -115,4 +115,5 @@ def render_clip(
     out_dir.mkdir(parents=True, exist_ok=True)
     final = out_dir / final_filename(title, index)
     shutil.move(str(ws.path / out_name), final)
+    final.with_suffix(".srt").write_text(build_srt(blocks), encoding="utf-8")
     return final

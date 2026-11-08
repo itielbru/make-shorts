@@ -34,6 +34,7 @@ class Profile:
     engine: str = "auto"
     cloud_allowed: bool = False
     teaching_mode: bool = True
+    style_notes: str = ""  # free text about audience, tone and taste; Claude reads it every run
 
 
 _FIELDS = {f.name for f in dataclasses.fields(Profile)}

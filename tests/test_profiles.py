@@ -56,6 +56,15 @@ def test_defaults_match_spec():
     assert p.teaching_mode is True
 
 
+def test_style_notes_default_empty_and_roundtrips(tmp_path):
+    p = profiles.load_template("podcaster")
+    assert p.style_notes == ""
+    custom = dataclasses.replace(p, style_notes="הקהל שלי: נשים בגיל 30-45. טון חם ולא קליני.")
+    path = tmp_path / "p.json"
+    profiles.save_profile(custom, path)
+    assert profiles.load_profile(path).style_notes == custom.style_notes
+
+
 def test_max_below_min_rejected():
     p = dataclasses.replace(profiles.load_template("podcaster"), min_s=60, max_s=30)
     with pytest.raises(UserFacingError) as exc:

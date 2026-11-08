@@ -318,3 +318,39 @@ def test_setup_without_a_profile_does_not_claim_a_privacy_choice_the_user_never_
     advice = json.loads(out)["advice"]
     assert advice["engine"] == "groq"
     assert "בחרת" not in advice["reason_he"] and "הסכמת" not in advice["reason_he"]
+
+
+def test_correct_shows_clip_text_and_applies_word_fixes(refined, capsys):
+    code, out, _ = run(capsys, "correct", "--project", refined, "--clips", "1")
+    assert code == 0 and "[0]שלום" in out
+    edits = refined / "edits.json"
+    edits.write_text(json.dumps([{"index": 2, "text": "ברוכות"}], ensure_ascii=False), encoding="utf-8")
+    code, out, _ = run(capsys, "correct", "--project", refined, "--edits", edits)
+    assert code == 0 and "[2]ברוכות" in out
+    state = json.loads((refined / "process_config.json").read_text(encoding="utf-8"))
+    saved = transcript_mod_load(state["transcript_path"])
+    assert saved.words[2].text == "ברוכות"
+    assert (saved.words[2].start, saved.words[2].end) == (WORDS[2].start, WORDS[2].end)
+
+
+def test_correct_rejects_bad_edits(refined, capsys):
+    edits = refined / "edits.json"
+    edits.write_text(json.dumps([{"index": 999, "text": "x"}]), encoding="utf-8")
+    code, _, err = run(capsys, "correct", "--project", refined, "--edits", edits)
+    assert code == 2 and HEBREW.search(err)
+    edits.write_text(json.dumps([{"index": 1, "text": "שתי מילים"}], ensure_ascii=False), encoding="utf-8")
+    assert run(capsys, "correct", "--project", refined, "--edits", edits)[0] == 2
+
+
+def test_render_reports_when_the_source_video_is_gone(refined, capsys):
+    state_path = refined / "process_config.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["media_path"] = str(refined / "deleted.mp4")
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    code, _, err = run(capsys, "render", "--project", refined)
+    assert code == 2 and "ingest" in err
+
+
+def transcript_mod_load(path):
+    import transcript as transcript_mod
+    return transcript_mod.load_transcript(Path(path))

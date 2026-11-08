@@ -37,7 +37,9 @@ def test_frontmatter_only_uses_allowed_keys_and_has_name_and_description():
     assert set(keys) <= ALLOWED_KEYS
     assert keys["name"] == "make-shorts"
     assert len(keys["description"]) > 80
-    assert "AskUserQuestion" in keys["allowed-tools"]
+    tools = keys["allowed-tools"]
+    # The skill tells Claude to write profile.json and picks.json, so Write and Edit must be allowed.
+    assert all(tool in tools for tool in ("Bash", "Read", "Write", "Edit", "AskUserQuestion"))
 
 
 def test_every_script_path_in_skill_md_exists():

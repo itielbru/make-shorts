@@ -211,3 +211,30 @@ def test_unknown_engine_name_raises():
     with pytest.raises(UserFacingError) as exc:
         engines.get_engine("nonsense")
     assert exc.value.key == "engine_not_available"
+
+
+def test_bare_word_timestamps_get_punctuation_back_from_segment_text(fake, audio_file):
+    fake.script = [ok({
+        "words": [
+            {"word": "שלום", "start": 1.0, "end": 1.4},
+            {"word": "עולם", "start": 1.5, "end": 1.9},
+            {"word": "מה", "start": 3.0, "end": 3.2},
+            {"word": "נשמע", "start": 3.3, "end": 3.7},
+        ],
+        "segments": [
+            {"text": " שלום, עולם.", "start": 1.0, "end": 2.0},
+            {"text": " מה נשמע?", "start": 3.0, "end": 3.8},
+        ],
+    })]
+    t = transcribe(make_engine(fake, []), audio_file)
+    assert [w.text for w in t.words] == ["שלום,", "עולם.", "מה", "נשמע?"]
+    assert [w.start for w in t.words] == [1.0, 1.5, 3.0, 3.3]
+
+
+def test_punctuation_merge_leaves_words_alone_when_segment_text_does_not_match(fake, audio_file):
+    fake.script = [ok({
+        "words": [{"word": "אחת", "start": 1.0, "end": 1.4}, {"word": "שתיים", "start": 1.5, "end": 1.9}],
+        "segments": [{"text": " משהו אחר לגמרי.", "start": 1.0, "end": 2.0}],
+    })]
+    t = transcribe(make_engine(fake, []), audio_file)
+    assert [w.text for w in t.words] == ["אחת", "שתיים"]

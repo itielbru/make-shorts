@@ -7,6 +7,7 @@ key comes only from config/environment and never appears in a message.
 from __future__ import annotations
 
 import json
+import re
 import time
 import urllib.error
 import urllib.request
@@ -25,6 +26,35 @@ MODEL = "whisper-large-v3"
 USER_AGENT = "make-shorts/1.0 (+claude-code; python-urllib)"
 MAX_ATTEMPTS = 4
 MAX_429_RETRIES = 2
+
+
+_EDGE = re.compile(r"^[\W_]+|[\W_]+$")
+
+
+def _norm(token: str) -> str:
+    return _EDGE.sub("", token).casefold()
+
+
+def merge_punctuation(words: list[Word], segments: list[dict]) -> list[Word]:
+    """Word timestamps from Whisper-style APIs are often bare tokens; punctuation lives only in
+    the segment text. Put it back where a segment token matches the word, so sentence ends survive."""
+    merged = list(words)
+    for seg in segments:
+        tokens = str(seg.get("text", "")).split()
+        lo, hi = float(seg["start"]) - 0.05, float(seg["end"]) + 0.05
+        idx = [i for i, w in enumerate(merged) if lo <= w.start < hi]
+        j = 0
+        for token in tokens:
+            wanted = _norm(token)
+            if not wanted or j >= len(idx):
+                continue
+            for k in range(j, min(j + 3, len(idx))):  # small resync window
+                if _norm(merged[idx[k]].text) == wanted:
+                    w = merged[idx[k]]
+                    merged[idx[k]] = Word(token, w.start, w.end)
+                    j = k + 1
+                    break
+    return merged
 
 
 class _ChunkFailed(Exception):
@@ -170,6 +200,8 @@ class GroqEngine:
                 for w in raw_words
                 if str(w.get("word", "")).strip()
             ]
+            if payload.get("segments"):
+                words = merge_punctuation(words, payload["segments"])
             return words, False
         words = []
         for segment in payload.get("segments") or []:

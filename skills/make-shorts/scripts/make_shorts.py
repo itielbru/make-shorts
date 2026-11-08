@@ -239,6 +239,8 @@ def cmd_transcribe(args: argparse.Namespace) -> int:
     state = ProjectState.load(project)
     if not state.media_path:
         raise UserFacingError("no_media")
+    if not Path(state.media_path).exists():
+        raise UserFacingError("media_missing")
     if not state.has_audio:
         raise UserFacingError("no_audio_track")
     profile = _profile()
@@ -368,11 +370,48 @@ def _hook_modes(args: argparse.Namespace, profile: Profile) -> tuple[HookMode, d
     return default, overrides
 
 
+def cmd_correct(args: argparse.Namespace) -> int:
+    """Show the caption text of the chosen clips and fix misheard words before they are burned in."""
+    project = _project(args)
+    state = ProjectState.load(project)
+    if not state.clips:
+        raise UserFacingError("no_clips")
+    t = _load_transcript(state)
+    report = Report("טקסט הכתוביות")
+    if args.edits:
+        try:
+            edits = json.loads(Path(args.edits).read_text(encoding="utf-8"))
+            fixes = [(int(e["index"]), str(e["text"]).strip()) for e in edits]
+        except (OSError, ValueError, KeyError, TypeError):
+            raise UserFacingError("bad_edits_file") from None
+        for index, text in fixes:
+            if not (0 <= index < len(t.words)) or not text or any(ch.isspace() for ch in text):
+                raise UserFacingError("bad_edits_file")
+        for index, text in fixes:
+            word = t.words[index]
+            t.words[index] = transcript_mod.Word(text, word.start, word.end)
+        transcript_mod.save_transcript(t, Path(state.transcript_path))
+        report.bullet(f"תוקנו {len(fixes)} מילים. התזמון נשמר.")
+    wanted = {int(x) for x in args.clips.split(",")} if args.clips else None
+    for entry in state.clips:
+        if wanted and entry["id"] not in wanted:
+            continue
+        clip = _clip_from(entry)
+        report.section(
+            f"קליפ {entry['id']}: {clip.title}",
+            [selection.render_indexed_transcript(t, clip.start_word, clip.end_word)],
+        )
+    print(report.markdown())
+    return 0
+
+
 def cmd_render(args: argparse.Namespace) -> int:
     project = _project(args)
     state = ProjectState.load(project)
     if not state.clips:
         raise UserFacingError("no_clips")
+    if not Path(state.media_path).exists():
+        raise UserFacingError("media_missing")
     t = _load_transcript(state)
     profile = _profile()
     default_hook, hook_overrides = _hook_modes(args, profile)
@@ -450,11 +489,15 @@ def cmd_qa(args: argparse.Namespace) -> int:
 
 def cmd_cleanup(args: argparse.Namespace) -> int:
     state = ProjectState.load(_project(args))
+    report = Report("ניקוי")
     if state.workspace:
-        Workspace(Path(state.workspace)).cleanup()
+        workspace_path = Path(state.workspace)
+        if state.media_path and workspace_path in Path(state.media_path).parents:
+            report.bullet("הסרטון הורד מקישור ונמחק יחד עם תיקיית העבודה. להמשך עבודה עליו צריך להוריד אותו שוב (ingest).")
+            state.media_path = ""
+        Workspace(workspace_path).cleanup()
         state.workspace = ""
         state.save()
-    report = Report("ניקוי")
     report.bullet("תיקיית העבודה הזמנית נמחקה. הקליפים והתמלול נשארו.")
     print(report.markdown())
     return 0
@@ -495,6 +538,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--tail-s", type=float)
     p.add_argument("--snap-s", type=float)
     p.add_argument("--sentence-snap-words", type=int)
+
+    p = add("correct", cmd_correct)
+    p.add_argument("--clips")
+    p.add_argument("--edits", help='קובץ JSON עם תיקוני מילים: [{"index": 12, "text": "מילה"}]')
 
     p = add("render", cmd_render)
     p.add_argument("--clips", help="מספרי קליפים מופרדים בפסיק (ברירת מחדל: כולם)")

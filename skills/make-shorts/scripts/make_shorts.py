@@ -158,7 +158,9 @@ def _clip_from(d: dict) -> Clip:
 def cmd_setup(args: argparse.Namespace) -> int:
     env = setup_env.check_environment()
     hw = setup_env.detect_hardware()
-    cloud_allowed = False
+    # Before a profile exists the user has made no privacy choice, so advise as if cloud were
+    # possible (it is the only engine in this version) and let the wizard ask for consent.
+    cloud_allowed = True
     try:
         cloud_allowed = _profile().cloud_allowed
     except UserFacingError:

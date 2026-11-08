@@ -310,3 +310,11 @@ def test_cleanup_removes_workspace_but_keeps_outputs(refined, capsys):
     assert code == 0
     assert not workspace_dir.exists()
     assert len(list((refined / "clips").glob("*.mp4"))) == 1
+
+
+def test_setup_without_a_profile_does_not_claim_a_privacy_choice_the_user_never_made(config_home, monkeypatch, capsys):
+    patch_env(monkeypatch)
+    code, out, _ = run(capsys, "setup", "--json", "--skip-selftest")
+    advice = json.loads(out)["advice"]
+    assert advice["engine"] == "groq"
+    assert "בחרת" not in advice["reason_he"] and "הסכמת" not in advice["reason_he"]

@@ -1,0 +1,11 @@
+{
+  "name": "make-shorts",
+  "owner": { "name": "itiel" },
+  "plugins": [
+    {
+      "name": "make-shorts",
+      "source": "./",
+      "description": "Turn a long video or podcast into captioned vertical clips for Reels and Shorts. Hebrew-friendly captions, guided setup for non-technical users."
+    }
+  ]
+}

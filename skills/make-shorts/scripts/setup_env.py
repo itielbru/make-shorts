@@ -135,7 +135,7 @@ def recommend_engine(hw: Hardware, cloud_allowed: bool) -> EngineAdvice:
         return EngineAdvice(
             "groq",
             "במחשב שלך אין כרטיס מסך נפרד, ולכן תמלול מקומי יהיה איטי. "
-            "Groq מהיר וחינמי (עם מגבלות), והאודיו נשלח אליהם כי הסכמת לכך.",
+            "Groq מהיר וחינמי (עם מגבלות), אבל האודיו נשלח אליהם, ולכן נדרשת הסכמה שלך.",
             False,
         )
     return EngineAdvice(

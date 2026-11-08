@@ -1,0 +1,109 @@
+{
+  "note": "שאלות ההקמה, בשתי קריאות ל-AskUserQuestion. כל שאלה ממפה לשדה בפרופיל (field). האפשרות עם recommended=true היא ברירת המחדל המומלצת, וצריך לסמן אותה כך בפני המשתמש. שדות פתוחים (כללי זהירות והערות סגנון) נשאלים בשיחה רגילה אחרי שתי הקריאות.",
+  "batches": [
+    {
+      "id": "about-you",
+      "questions": [
+        {
+          "field": "domain",
+          "header": "תחום",
+          "question": "מה התחום שלך? אתאים לפי זה את סוגי הקטעים וכללי הזהירות.",
+          "multiSelect": false,
+          "options": [
+            {"label": "טיפול ובריאות", "description": "פסיכולוגים, מטפלים ומאמנים. נוסיף כללי זהירות על פרטים של מטופלים ועל הבטחות טיפוליות.", "value": "therapist", "recommended": false},
+            {"label": "פודקאסט ותוכן", "description": "שיחות, ראיונות ותוכן כללי. בלי כללי זהירות מיוחדים.", "value": "podcaster", "recommended": true},
+            {"label": "הוראה והרצאות", "description": "מרצים ומורים. נוסיף זהירות מטענות עובדתיות לא בדוקות.", "value": "educator", "recommended": false},
+            {"label": "עסקים ושיווק", "description": "יועצים ויזמים. נוסיף זהירות מהבטחות רווח ומידע סודי.", "value": "business", "recommended": false}
+          ]
+        },
+        {
+          "field": "language",
+          "header": "שפה",
+          "question": "באיזו שפה מדברים בסרטון?",
+          "multiSelect": false,
+          "options": [
+            {"label": "עברית", "description": "השפה שנבדקה והותאמה במיוחד: כתוביות מימין לשמאל ופיסוק עברי.", "value": "he", "recommended": true},
+            {"label": "אנגלית", "description": "אמורה לעבוד, אבל לא נבדקה עד הסוף בגרסה הזו.", "value": "en", "recommended": false},
+            {"label": "ערבית", "description": "כתוביות מימין לשמאל אמורות לעבוד, אבל לא נבדקו.", "value": "ar", "recommended": false},
+            {"label": "שפה אחרת", "description": "אפשר לכתוב אותה בתשובה חופשית. האיכות לא מובטחת.", "value": "other", "recommended": false}
+          ]
+        },
+        {
+          "field": "strong_clip_types",
+          "header": "סוגי קטעים",
+          "question": "אילו קטעים הכי שווה להוציא מהסרטון? אפשר לסמן כמה.",
+          "multiSelect": true,
+          "options": [
+            {"label": "הסבר על רעיון או כלי", "description": "רעיון שלם וקצר שמראה ידע וערך מקצועי.", "value": "הסבר על רעיון או כלי", "recommended": true},
+            {"label": "פתיח שעוצר גלילה", "description": "משפט פתיחה שתופס את הצופה בשתי השניות הראשונות, כמו שאלה או טענה מפתיעה.", "value": "פתיח שעוצר גלילה", "recommended": true},
+            {"label": "רגע רגשי ומזדהה", "description": "משפט שהצופה מזהה בו את עצמו, ושגורם לו לשתף.", "value": "רגע רגשי ומזדהה", "recommended": false},
+            {"label": "עצה פרקטית קצרה", "description": "טיפ שאפשר ליישם מיד, למשל שלושה דברים ש...", "value": "עצה פרקטית קצרה", "recommended": false}
+          ]
+        },
+        {
+          "field": "length",
+          "header": "אורך",
+          "question": "כמה ארוכים הקליפים?",
+          "multiSelect": false,
+          "options": [
+            {"label": "הרעיון קובע", "description": "בין 20 ל-90 שניות, לפי מה שהרעיון צריך. אני לא אמתח קטע כדי להגיע לאורך.", "value": "20-90", "recommended": true},
+            {"label": "קצרים", "description": "בין 15 ל-45 שניות. מתאים לצפייה מהירה.", "value": "15-45", "recommended": false},
+            {"label": "בינוניים", "description": "בין 30 ל-60 שניות.", "value": "30-60", "recommended": false},
+            {"label": "ארוכים", "description": "בין 45 ל-90 שניות. יש מקום להסבר מלא יותר.", "value": "45-90", "recommended": false}
+          ]
+        }
+      ]
+    },
+    {
+      "id": "look-and-privacy",
+      "questions": [
+        {
+          "field": "cloud_allowed",
+          "header": "פרטיות",
+          "question": "מותר לשלוח את האודיו של הסרטון לשירות התמלול Groq בענן? בגרסה הזו זו הדרך היחידה לתמלל.",
+          "multiSelect": false,
+          "options": [
+            {"label": "כן, מותר", "description": "חינמי (עם מגבלות שימוש) ומהיר, גם בלי כרטיס מסך חזק. האודיו יוצא מהמחשב אל Groq.", "value": true, "recommended": true},
+            {"label": "לא, רק במחשב שלי", "description": "תמלול מקומי עוד לא זמין בגרסה הזו, ולכן לא נוכל להמשיך עד שיתווסף. עדיף לבחור כך אם התוכן רגיש.", "value": false, "recommended": false}
+          ]
+        },
+        {
+          "field": "caption_preset",
+          "header": "סגנון",
+          "question": "איך ייראו הכתוביות?",
+          "multiSelect": false,
+          "options": [
+            {"label": "נקי", "description": "לבן עם קו שחור דק וצל עדין. קריא ולא צעקני.", "value": "clean", "recommended": true},
+            {"label": "בולט", "description": "גדול יותר עם קו שחור עבה. בולט גם על רקע עמוס.", "value": "bold", "recommended": false},
+            {"label": "קופסה", "description": "טקסט על רקע כהה חצי שקוף. קריא מאוד על כל רקע.", "value": "boxed", "recommended": false},
+            {"label": "ללא מסגרת", "description": "בלי קו שחור מסביב לאותיות, רק צל רך. נראה נקי, אבל פחות קריא על תמונה בהירה.", "value": "plain", "recommended": false}
+          ]
+        },
+        {
+          "field": "font",
+          "header": "פונט",
+          "question": "איזו אווירה מתאימה לך לכתוביות?",
+          "multiSelect": false,
+          "options": [
+            {"label": "נקי ומודרני", "description": "פונט Heebo. קריא מאוד גם בקטן.", "value": "heebo", "recommended": true},
+            {"label": "ידידותי ומעוגל", "description": "פונט Rubik. חם ונגיש, פחות רשמי.", "value": "rubik", "recommended": false},
+            {"label": "בולט ושובב", "description": "פונט Secular One. עבה ובעל אופי, מתאים לאנרגיה גבוהה.", "value": "secular_one", "recommended": false},
+            {"label": "רשמי עם שריפים", "description": "פונט Frank Ruhl Libre. אווירה קלאסית ורצינית.", "value": "frank_ruhl_libre", "recommended": false}
+          ]
+        },
+        {
+          "field": "hook_default",
+          "header": "פתיח",
+          "question": "מה לעשות בתחילת כל קליפ, כברירת מחדל? אפשר לשנות לכל קליפ בנפרד.",
+          "multiSelect": false,
+          "options": [
+            {"label": "בלי פתיח", "description": "הקליפ מתחיל בדיוק כמו שנחתך. הכי בטוח.", "value": "none", "recommended": true},
+            {"label": "כותרת על המסך", "description": "טקסט קצר בשלוש השניות הראשונות. התוכן לא משתנה.", "value": "title", "recommended": false},
+            {"label": "טיזר", "description": "המשפט החזק ביותר מופיע קודם, ואז הקליפ מתחיל מההתחלה.", "value": "teaser", "recommended": false},
+            {"label": "הקדמת משפט", "description": "המשפט החזק מועבר לתחילת הקליפ. מסוכן: עלול לעוות את ההקשר, ולכן לא מומלץ כברירת מחדל.", "value": "reorder", "recommended": false}
+          ]
+        }
+      ]
+    }
+  ]
+}

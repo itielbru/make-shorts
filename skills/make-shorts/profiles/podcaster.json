@@ -1,0 +1,20 @@
+{
+  "name": "podcaster",
+  "language": "he",
+  "domain": "פודקאסט",
+  "strong_clip_types": [
+    "רגעים חזקים",
+    "פתיח שעוצר גלילה",
+    "רגע רגשי ומזדהה",
+    "הסבר על רעיון"
+  ],
+  "min_s": 20,
+  "max_s": 90,
+  "caption_preset": "bold",
+  "font": "heebo",
+  "hook_default": "none",
+  "red_flags": [],
+  "engine": "auto",
+  "cloud_allowed": false,
+  "teaching_mode": true
+}

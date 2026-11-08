@@ -1,0 +1,25 @@
+{
+  "name": "therapist",
+  "language": "he",
+  "domain": "טיפול פסיכולוגי (CBT)",
+  "strong_clip_types": [
+    "הסבר על רעיון או כלי",
+    "פתיח שעוצר גלילה",
+    "רגע רגשי ומזדהה",
+    "עצה פרקטית קצרה"
+  ],
+  "min_s": 20,
+  "max_s": 90,
+  "caption_preset": "clean",
+  "font": "heebo",
+  "hook_default": "none",
+  "red_flags": [
+    "אזכור מטופל או פרט שמזהה אדם",
+    "הבטחה טיפולית או ריפוי מובטח",
+    "המלצה על תרופות או מינונים",
+    "תוכן שעלול להישמע כייעוץ אישי למי שנמצא במשבר"
+  ],
+  "engine": "auto",
+  "cloud_allowed": false,
+  "teaching_mode": true
+}

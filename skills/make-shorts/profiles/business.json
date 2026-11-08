@@ -1,0 +1,23 @@
+{
+  "name": "business",
+  "language": "he",
+  "domain": "עסקים ושיווק",
+  "strong_clip_types": [
+    "עצה פרקטית קצרה",
+    "הסבר על רעיון או כלי",
+    "סיפור לקוח או מקרה בוחן",
+    "פתיח שעוצר גלילה"
+  ],
+  "min_s": 20,
+  "max_s": 90,
+  "caption_preset": "bold",
+  "font": "heebo",
+  "hook_default": "title",
+  "red_flags": [
+    "הבטחת רווח או תשואה",
+    "מידע סודי של לקוח או חברה"
+  ],
+  "engine": "auto",
+  "cloud_allowed": false,
+  "teaching_mode": true
+}

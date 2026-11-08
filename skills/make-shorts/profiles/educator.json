@@ -1,0 +1,23 @@
+{
+  "name": "educator",
+  "language": "he",
+  "domain": "הרצאות והוראה",
+  "strong_clip_types": [
+    "הסבר על רעיון",
+    "דוגמה שמבהירה מושג",
+    "עצה פרקטית קצרה",
+    "פתיח שעוצר גלילה"
+  ],
+  "min_s": 20,
+  "max_s": 90,
+  "caption_preset": "clean",
+  "font": "heebo",
+  "hook_default": "title",
+  "red_flags": [
+    "טענה עובדתית שלא נבדקה",
+    "פרטים אישיים של תלמידים"
+  ],
+  "engine": "auto",
+  "cloud_allowed": false,
+  "teaching_mode": true
+}

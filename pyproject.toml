@@ -1,0 +1,4 @@
+[tool.pytest.ini_options]
+pythonpath = ["skills/make-shorts/scripts"]
+testpaths = ["tests"]
+addopts = "-q"

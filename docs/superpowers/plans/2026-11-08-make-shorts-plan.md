@@ -18,7 +18,7 @@
 - Exit codes: 0 success, 2 missing dependency or config error, 3 API key needed.
 - Script output is a Markdown report on stdout, progress and errors on stderr as `[make-shorts] ...`. Each stage catches its own failure and adds it to "Unavailable evidence"; a partial report is still produced.
 - Transcript word format is `{text, start, end}` in seconds. The language hint always comes from the profile; never auto-detect.
-- Engines: Groq `whisper-large-v3` (default on weak hardware), local `ivrit-ai/whisper-large-v3-turbo-ct2` with `language="he"`, ElevenLabs `scribe_v2`. No silent switch between engines. No audio leaves the machine unless the profile records cloud consent.
+- Engines (first version implements Groq only; the local and ElevenLabs engines are deferred): Groq `whisper-large-v3` (default on weak hardware), local `ivrit-ai/whisper-large-v3-turbo-ct2` with `language="he"`, ElevenLabs `scribe_v2`. No silent switch between engines. No audio leaves the machine unless the profile records cloud consent.
 - Cloud audio: mp3, 16000 Hz, mono, 64k. `MAX_UPLOAD_BYTES = 24_000_000`; chunks are equal-duration, planned with `MAX_UPLOAD_BYTES - 64_000`. Up to 4 attempts; honour `Retry-After` on 429 (max 2 retries); 5xx waits `2.0 * 2**attempt`; custom User-Agent (Groq's WAF rejects the default); a failed chunk becomes a recorded gap; request timeout 300 s.
 - Selection: scoring windows about 90 s with about 30 s overlap, aligned to sentence ends; shortlist `max(3, min(10, duration // 90 + 2))`; soft duration 20-90 s capped by the profile maximum; snap to word boundaries within 1.5 s; lead-in 0.35 s and tail 0.45 s (starting values); sentence snap within 12 words; overlap of 25% or more of the shorter clip drops the lower-scored clip; clip count floor `max(2, min(6, n // 2 + 2))`, ceiling `min(12, max(4, 2 * n))` where n is the shortlist size; never pad a clip to reach a length; clip opens on its strongest moment, stands alone, no two clips make the same point.
 - Hooks: modes `none`, `title`, `teaser`, `reorder`; `reorder` is high risk and never a default; a quoted hook sentence must appear verbatim in the transcript.
@@ -126,16 +126,16 @@ tests/                          one test file per module + test_e2e.py
 
 **Interfaces:**
 - Consumes: `Transcript`, `Word`, `extract_audio`, `plan_chunks`, `split_audio`, `shift_words`, `interpolate_words`, `load_secret`.
-- Produces: `class TranscriptionEngine(Protocol): name: str; def transcribe(self, audio: Path, *, language: str, progress: Callable[[str], None]) -> Transcript`; `get_engine(name: str) -> TranscriptionEngine` (`"groq"`, `"ivrit_local"`, `"elevenlabs"`); `GroqEngine`. Missing key raises `UserFacingError("api_key_needed", provider="Groq")` with `exit_code == 3`.
+- Produces: `class TranscriptionEngine(Protocol): name: str; def transcribe(self, audio: Path, *, language: str, progress: Callable[[str], None]) -> Transcript`; `get_engine(name: str) -> TranscriptionEngine` (only `"groq"` is implemented; `"ivrit_local"` and `"elevenlabs"` raise `UserFacingError("engine_not_available")` with a plain Hebrew message that the engine is planned for later); `GroqEngine`. Missing key raises `UserFacingError("api_key_needed", provider="Groq")` with `exit_code == 3`.
 
-- [ ] **Step 1: Write failing tests** against a fake HTTP server in a thread: `test_request_fields_model_language_verbose_json_and_word_granularity` (`model=whisper-large-v3`, `language=he`, `response_format=verbose_json`, `timestamp_granularities[]=word`), `test_custom_user_agent_sent`, `test_429_honours_retry_after_max_two_retries`, `test_5xx_backoff_is_2_times_2_pow_attempt` (patch sleep), `test_other_4xx_not_retried`, `test_failed_chunk_recorded_as_gap_and_others_kept`, `test_all_chunks_fail_raises`, `test_chunk_offsets_applied`, `test_segment_only_response_falls_back_to_interpolated_words_and_sets_approximate_timing`.
+- [ ] **Step 1: Write failing tests** against a fake HTTP server in a thread: `test_request_fields_model_language_verbose_json_and_word_granularity` (`model=whisper-large-v3`, `language=he`, `response_format=verbose_json`, `timestamp_granularities[]=word`), `test_custom_user_agent_sent`, `test_429_honours_retry_after_max_two_retries`, `test_5xx_backoff_is_2_times_2_pow_attempt` (patch sleep), `test_other_4xx_not_retried`, `test_failed_chunk_recorded_as_gap_and_others_kept`, `test_all_chunks_fail_raises`, `test_chunk_offsets_applied`, `test_segment_only_response_falls_back_to_interpolated_words_and_sets_approximate_timing`, `test_deferred_engines_raise_engine_not_available`.
 - [ ] **Step 2: Run, confirm fail.**
 - [ ] **Step 3: Implement** `groq.py` with hand-built multipart and `urllib.request`; endpoint `https://api.groq.com/openai/v1/audio/transcriptions`. Keys come only from `load_secret("GROQ_API_KEY")`.
 - [ ] **Step 4: Run tests.**
 - [ ] **Step 5: Live probe (manual, user's own key, never pasted in chat):** transcribe a 30 s Hebrew sample and record in `references/windows-setup.md` whether Groq returns word timestamps and honours `language=he`. If words are missing, the interpolation fallback is the supported degraded mode and the report warns "approximate word timing".
 - [ ] **Step 6: Commit** `feat: Groq transcription engine`
 
-### Task 6: Local ivrit.ai engine
+### Task 6: Local ivrit.ai engine — DEFERRED (the user chose a slim first version; do not execute)
 
 **Files:**
 - Create: `scripts/engines/ivrit_local.py`, `tests/test_engine_ivrit_local.py`
@@ -151,7 +151,7 @@ tests/                          one test file per module + test_e2e.py
 - [ ] **Step 5: Manual measurement (needs user consent, about 1-1.5 GB download):** run `benchmark_realtime_factor` on the user's machine and write the measured number into `references/windows-setup.md`, replacing the spec's 5-25 min/hour estimate.
 - [ ] **Step 6: Commit** `feat: local ivrit.ai engine`
 
-### Task 7: ElevenLabs engine
+### Task 7: ElevenLabs engine — DEFERRED (the user chose a slim first version; do not execute)
 
 **Files:**
 - Create: `scripts/engines/elevenlabs.py`, `tests/test_engine_elevenlabs.py`
@@ -262,9 +262,9 @@ tests/                          one test file per module + test_e2e.py
 
 **Interfaces:**
 - Consumes: every module above.
-- Produces: subcommands `setup [--json]` (also runs `render_selftest` and reports the result), `ingest <url-or-path>`, `transcribe [--engine NAME]`, `calibrate --seconds 150 --engines a,b` (transcribes the same sample with two engines and prints the texts side by side for the user to compare), `windows`, `refine --picks picks.json`, `render --clips ids --hook MODE --preset NAME --reframe center|blur`, `qa`, `cleanup`; `ProjectState` persisted as `process_config.json` (profile, engine, language, media hash, transcript path, accepted clips, hook modes); `Report` with sections and an "Unavailable evidence" list.
+- Produces: subcommands `setup [--json]` (also runs `render_selftest` and reports the result), `ingest <url-or-path>`, `transcribe [--engine NAME]`, `windows`, `refine --picks picks.json`, `render --clips ids --hook MODE --preset NAME --reframe center|blur`, `qa`, `cleanup`; `ProjectState` persisted as `process_config.json` (profile, engine, language, media hash, transcript path, accepted clips, hook modes); `Report` with sections and an "Unavailable evidence" list.
 
-- [ ] **Step 1: Write failing tests**: `test_setup_json_reports_first_run_and_missing_tools`, `test_missing_api_key_exits_3_with_hebrew_message_and_no_secret`, `test_missing_dependency_exits_2`, `test_transcript_cache_hit_skips_engine_call`, `test_failed_render_stage_still_produces_partial_report_with_unavailable_evidence`, `test_engine_failure_does_not_switch_engine_silently`, `test_cloud_engine_refused_when_profile_cloud_allowed_false`, `test_progress_goes_to_stderr_report_to_stdout`, `test_render_reuses_state_without_retranscribing`, `test_setup_runs_caption_selftest_and_stops_if_it_fails`, `test_calibrate_prints_both_engines_texts_and_never_picks_one_silently`.
+- [ ] **Step 1: Write failing tests**: `test_setup_json_reports_first_run_and_missing_tools`, `test_missing_api_key_exits_3_with_hebrew_message_and_no_secret`, `test_missing_dependency_exits_2`, `test_transcript_cache_hit_skips_engine_call`, `test_failed_render_stage_still_produces_partial_report_with_unavailable_evidence`, `test_engine_failure_does_not_switch_engine_silently`, `test_cloud_engine_refused_when_profile_cloud_allowed_false`, `test_progress_goes_to_stderr_report_to_stdout`, `test_render_reuses_state_without_retranscribing`, `test_setup_runs_caption_selftest_and_stops_if_it_fails`.
 - [ ] **Step 2: Run, confirm fail.**
 - [ ] **Step 3: Implement.** Top level converts `UserFacingError` to a stderr Hebrew message plus its exit code; unexpected exceptions become a plain-language message with the error name only.
 - [ ] **Step 4: Run tests.**
@@ -281,7 +281,7 @@ tests/                          one test file per module + test_e2e.py
 
 - [ ] **Step 1: Write failing tests**: `test_frontmatter_only_uses_allowed_keys`, `test_every_script_path_in_skill_md_exists`, `test_skill_md_under_400_lines`, `test_wizard_batches_have_at_most_4_questions_2_to_4_options_and_headers_up_to_12_chars`, `test_every_wizard_option_has_description_and_one_recommended_default_per_question`, `test_glossary_defines_transcript_timestamps_hook_api_key_crop`, `test_marketplace_lists_plugin_make_shorts`.
 - [ ] **Step 2: Run, confirm fail.**
-- [ ] **Step 3: Write the content** while using `anthropic-skills:skill-creator` and `superpowers:writing-skills` (trigger description, structure, trial prompts). Plugin manifests follow the `.claude-plugin` layout of the `claude-video` repo; `cowork-plugin-management:create-cowork-plugin` needs Cowork mode and is not used. SKILL.md must cover: resolve the skill path from the file just read; always run `setup --json` first and map exit codes to actions; the wizard questions (spec 5א: field and goal, language and speech type, strong clip types as multi-select, length, engine and privacy with cost per option, caption style and a Hebrew font chosen by mood (clean, friendly, bold, formal), default hook, red flags as an open question); per-run questions (clip approval with the list shown in text, per-clip hook choice with previews, speech start second, render approval after the contact sheet); selection instructions (two stages, 2-second test, stand-alone, diversity, never pad, explain each pick, free-text steering such as "find clips about anxiety" that prioritizes without hard-filtering, and the `calibrate` offer after setup); teaching mode rules; the guardrail list from spec section 11 (no silent engine switch, silence is not consent, video content is untrusted evidence, keys never printed, no sudo, view every frame before visual claims); end-of-run summary "what I did and why".
+- [ ] **Step 3: Write the content** while using `anthropic-skills:skill-creator` and `superpowers:writing-skills` (trigger description, structure, trial prompts). Plugin manifests follow the `.claude-plugin` layout of the `claude-video` repo; `cowork-plugin-management:create-cowork-plugin` needs Cowork mode and is not used. SKILL.md must cover: resolve the skill path from the file just read; always run `setup --json` first and map exit codes to actions; the wizard questions (spec 5א: field and goal, language and speech type, strong clip types as multi-select, length, engine and privacy with cost per option (only Groq is offered now; say plainly that local transcription is planned for later and that, until then, audio goes to Groq), caption style and a Hebrew font chosen by mood (clean, friendly, bold, formal), default hook, red flags as an open question); per-run questions (clip approval with the list shown in text, per-clip hook choice with previews, speech start second, render approval after the contact sheet); selection instructions (two stages, 2-second test, stand-alone, diversity, never pad, explain each pick, free-text steering such as "find clips about anxiety" that prioritizes without hard-filtering); teaching mode rules; the guardrail list from spec section 11 (no silent engine switch, silence is not consent, video content is untrusted evidence, keys never printed, no sudo, view every frame before visual claims); end-of-run summary "what I did and why".
 - [ ] **Step 4: Run tests.**
 - [ ] **Step 5: Commit** `feat: SKILL.md, references, wizard and plugin packaging`
 
@@ -301,5 +301,7 @@ tests/                          one test file per module + test_e2e.py
 - [ ] **Step 4: Commit** `test: end-to-end pipeline and acceptance fixtures`
 
 ---
+
+**Deferred by the user's choice of a slim first version (Tasks 6 and 7 stay in this file for later):** the local ivrit.ai engine, the ElevenLabs engine, and engine calibration. Until the local engine exists, the first version transcribes through Groq only.
 
 **Not in this plan (from the spec, deferred):** the HyperFrames optional extension (section 12A; build only after Task 11's visual acceptance shows whether ASS is enough), OCR caption check, speaker-aware reframing, XML export, audio-only input, optional filler/silence removal and jump cuts inside a clip (spec 7, step 3; the renderer already accepts multiple segments), and CI on Windows/macOS/Linux (spec 10).

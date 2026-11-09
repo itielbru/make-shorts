@@ -340,7 +340,10 @@ def test_correct_rejects_bad_edits(refined, capsys):
     edits.write_text(json.dumps([{"index": 999, "text": "x"}]), encoding="utf-8")
     code, _, err = run(capsys, "correct", "--project", refined, "--edits", edits)
     assert code == 2 and HEBREW.search(err)
+    # Several words in one edit are allowed now (one heard word that is really two); a missing index is not.
     edits.write_text(json.dumps([{"index": 1, "text": "שתי מילים"}], ensure_ascii=False), encoding="utf-8")
+    assert run(capsys, "correct", "--project", refined, "--edits", edits)[0] == 0
+    edits.write_text(json.dumps([{"text": "x"}]), encoding="utf-8")
     assert run(capsys, "correct", "--project", refined, "--edits", edits)[0] == 2
 
 

@@ -135,7 +135,18 @@ class GroqEngine:
             raise UserFacingError("transcription_failed", provider="Groq", reason=last_reason)
         return Transcript(words=words, language=language, engine=self.name, gaps=gaps, approximate_timing=approximate)
 
-    def _transcribe_chunk(self, file: Path, key: str, language: str) -> tuple[list[Word], bool]:
+    def transcribe_short(self, audio: Path, *, language: str, prompt: str | None = None) -> list[Word]:
+        """One short file (a finished clip's audio), with an optional vocabulary hint of names and terms."""
+        key = load_secret("GROQ_API_KEY")
+        if not key:
+            raise UserFacingError("api_key_needed", provider="Groq")
+        try:
+            words, _ = self._transcribe_chunk(audio, key, language, prompt)
+        except _ChunkFailed as failure:
+            raise UserFacingError("transcription_failed", provider="Groq", reason=failure.reason) from None
+        return words
+
+    def _transcribe_chunk(self, file: Path, key: str, language: str, prompt: str | None = None) -> tuple[list[Word], bool]:
         fields = [
             ("model", MODEL),
             ("language", language),
@@ -144,6 +155,8 @@ class GroqEngine:
             ("timestamp_granularities[]", "word"),
             ("timestamp_granularities[]", "segment"),
         ]
+        if prompt:
+            fields.append(("prompt", prompt[:800]))
         body, content_type = _multipart(fields, "audio.mp3", file.read_bytes())
         payload = self._post_with_retries(body, content_type, key)
         return self._parse(payload)

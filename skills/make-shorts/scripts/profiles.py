@@ -37,6 +37,12 @@ class Profile:
     cloud_allowed: bool = False
     teaching_mode: bool = True
     style_notes: str = ""  # free text about audience, tone and taste; Claude reads it every run
+    # How the picture moves. Defaults are what a real user chose after seeing the alternatives:
+    # a fade to black at the end looked bad, a slow zoom on still shots looked too strong,
+    # and a 15% punch-in at joins read as a jump of its own (8% hides the join without that).
+    slow_zoom: bool = False
+    fade_to_black: bool = False
+    punch_in: float = 1.08
 
 
 _FIELDS = {f.name for f in dataclasses.fields(Profile)}
@@ -61,6 +67,8 @@ def validate(p: Profile) -> None:
         raise _bad(f"פונט לא מוכר ({p.font}). האפשרויות: " + ", ".join(FONTS))
     if p.min_s <= 0 or p.max_s < p.min_s:
         raise _bad("אורך הקליפ המרבי חייב להיות גדול מהמינימלי")
+    if not 1.0 <= p.punch_in <= 1.3:
+        raise _bad("הזום בחיבורים (punch_in) צריך להיות בין 1.0 (בלי זום) ל-1.3")
 
 
 def load_profile(path: Path) -> Profile:

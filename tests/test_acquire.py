@@ -17,7 +17,11 @@ def test_ytdlp_args_contain_no_playlist_N8_format_and_merge_mp4(tmp_path):
     assert args[0] == "yt-dlp"
     assert "--no-playlist" in args
     assert args[args.index("-N") + 1] == "8"
-    assert args[args.index("-f") + 1] == "bv*[height<=720]+ba/b[height<=720]/bv+ba/b"
+    # 1080p: the vertical crop keeps only a 9:16 strip of the wide picture, so a 720p source is
+    # stretched 2.7x and smears; H.264 first, because it decodes far faster than AV1 on a weak CPU
+    assert args[args.index("-f") + 1] == (
+        "bv*[height<=1080][vcodec^=avc1]+ba/bv*[height<=1080]+ba/b[height<=1080]/bv+ba/b"
+    )
     assert args[args.index("--merge-output-format") + 1] == "mp4"
     assert args[-1] == "https://youtu.be/abc"
     assert "--" in args  # the URL can never be read as an option

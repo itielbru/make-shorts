@@ -77,7 +77,8 @@ def test_multiple_segments_use_one_seeked_input_each_and_concat():
     cmd = render.build_ffmpeg_cmd("in.mp4", [(1.0, 2.0), (2.0, 6.0)], ass_name="c.ass", reframe="center", out_name="o.mp4")
     assert cmd.count("-i") == 2
     assert cmd[cmd.index("-ss") + 1] == "1.000" and cmd[cmd.index("-t") + 1] == "1.000"
-    assert "concat=n=2:v=1:a=1" in cmd[cmd.index("-filter_complex") + 1]
+    graph = cmd[cmd.index("-filter_complex") + 1]
+    assert "concat=n=2:v=1:a=0[vc]" in graph and "concat=n=2:v=0:a=1[ac]" in graph
 
 
 def test_no_audio_graph_has_no_audio_chain():

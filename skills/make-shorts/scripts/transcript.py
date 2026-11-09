@@ -10,6 +10,8 @@ import json
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from messages import UserFacingError
+
 
 @dataclass(frozen=True)
 class Word:
@@ -81,3 +83,49 @@ def interpolate_words(segment_text: str, start: float, end: float) -> list[Word]
         w_end = end if i == len(tokens) - 1 else start + (i + 1) * step
         words.append(Word(token, round(w_start, 6), round(w_end, 6)))
     return words
+
+
+def apply_edits(words: list[Word], edits: list[dict]) -> list[Word]:
+    """Fix misheard words without moving any index.
+
+    `text` may hold several words (one heard word that is really two) or be empty to
+    drop a hallucinated word from the captions. Timing stays that of the original word.
+    """
+    fixed = list(words)
+    try:
+        pairs = [(int(e["index"]), str(e["text"]).strip()) for e in edits]
+    except (KeyError, TypeError, ValueError):
+        raise UserFacingError("bad_edits_file") from None
+    for index, text in pairs:
+        if not 0 <= index < len(fixed):
+            raise UserFacingError("bad_edits_file")
+        fixed[index] = Word(text, fixed[index].start, fixed[index].end)
+    return fixed
+
+
+_PREFIXES = "בהלמוכש"
+_EDGE_PUNCT = ".,!?;:\"'()[]…-–"
+
+
+def apply_glossary(words: list[Word], mapping: dict[str, str]) -> list[Word]:
+    """Replace misheard names and terms across the whole transcript.
+
+    Keeps edge punctuation and timing, and also matches the word with one Hebrew prefix letter
+    (ב, ה, ל, מ, ו, כ, ש) in front, for keys of three letters or more.
+    """
+    fixed: list[Word] = []
+    for w in words:
+        text = w.text
+        core = text.strip(_EDGE_PUNCT)
+        if not core:
+            fixed.append(w)
+            continue
+        head = text[: text.index(core)]
+        tail = text[text.index(core) + len(core):]
+        replacement = None
+        if core in mapping:
+            replacement = mapping[core]
+        elif len(core) > 3 and core[0] in _PREFIXES and len(core) - 1 >= 3 and core[1:] in mapping:
+            replacement = core[0] + mapping[core[1:]]
+        fixed.append(Word(head + replacement + tail, w.start, w.end) if replacement is not None else w)
+    return fixed

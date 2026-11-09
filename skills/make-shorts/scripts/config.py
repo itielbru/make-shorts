@@ -128,3 +128,15 @@ def write_settings(updates: dict[str, str]) -> None:
         if os.path.exists(tmp_name):
             os.unlink(tmp_name)
         raise
+
+
+def has_setting(name: str) -> bool:
+    """Whether a setting has a non-empty value. Never returns or prints the value itself."""
+    return bool(get_setting(name))
+
+
+def prepare_key_file(name: str) -> Path:
+    """Make sure the settings file has an empty `NAME=` line for the user to fill in. Keeps every other line."""
+    if f"{name}=" not in "".join(line.replace(" ", "") for line in _read_text().splitlines()):
+        write_settings({name: ""})
+    return _config_file()

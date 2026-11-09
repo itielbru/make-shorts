@@ -240,3 +240,69 @@ def qa_report_markdown(frames: list[Frame], sheet: Path | None, findings: list[F
         "אל תסיק על מה שנראה בווידאו רק מהתמלול.",
     ]
     return "\n".join(lines) + "\n"
+
+
+MIN_SHOT_S = 1.0
+
+
+AV_GAP_S = 0.15        # a frame or two of padding is normal; the L-cut bug gave half a second
+DUPLICATE_DIFF = 0.05  # mean grey difference of a repeated frame (a still face in the source is ~0.2)
+
+
+def duplicate_runs(diffs: list[float], fps: float, min_run: int = 2) -> list[tuple[float, int]]:
+    """(time, count) of runs of repeated frames. diffs[k] compares frame k+1 with frame k.
+    The source never repeats a frame exactly, so a run means the render held a picture."""
+    runs: list[tuple[float, int]] = []
+    k = 0
+    while k < len(diffs):
+        if diffs[k] < DUPLICATE_DIFF:
+            j = k
+            while j < len(diffs) and diffs[j] < DUPLICATE_DIFF:
+                j += 1
+            if j - k >= min_run:
+                runs.append((round((k + 1) / fps, 3), j - k))
+            k = j
+        else:
+            k += 1
+    return runs
+
+
+def render_findings(video_s: float, audio_s: float | None, duplicate_runs: list[tuple[float, int]]) -> list[str]:
+    """Warnings about faults the render itself can cause, unlike the source's own look:
+    picture and sound of different length (they drift apart), and frames held in place."""
+    out: list[str] = []
+    if audio_s is not None and abs(video_s - audio_s) > AV_GAP_S:
+        out.append(f"התמונה ({video_s:.1f} שניות) והקול ({audio_s:.1f} שניות) לא באותו אורך, אז הם לא מסונכרנים. זו תקלת רינדור.")
+    for t, count in duplicate_runs:
+        out.append(f"התמונה נעצרת ב-{t:.1f} למשך {count} פריימים זהים, והקול ממשיך. זו תקלת רינדור.")
+    return out
+
+
+JOIN_CUT_TOLERANCE_S = 0.15
+
+
+def motion_findings(
+    cuts: list[float],
+    joins: list[tuple[float, bool]],
+    duration: float,
+    crop_steps: list[tuple[float, float]],
+    min_shot: float = MIN_SHOT_S,
+) -> list[str]:
+    """Plain-Hebrew warnings about what makes a short look jumpy, from the finished clip:
+    shots too short to register (a flash), joins where the same person jumps in place,
+    and a vertical crop stuck at the edge of the wide picture (the speaker may be cut off).
+    Times are seconds on the clip's own timeline."""
+    out: list[str] = []
+    points = [0.0] + sorted(cuts) + [duration]
+    for a, b in zip(points, points[1:]):
+        if b - a < min_shot:
+            out.append(f"צילום קצר של {b - a:.1f} שניות ב-{a:.1f}, נראה כמו הבזק.")
+    for t, is_jump in joins:
+        # the join time is counted from segment lengths and can sit a frame or two off the frame
+        # where the picture really changes; a camera cut that close means the picture did change
+        if is_jump and not any(abs(c - t) <= JOIN_CUT_TOLERANCE_S for c in cuts):
+            out.append(f"קפיצה בחיבור ב-{t:.1f}: אותו אדם משני הצדדים, בלי זום שמסתיר את זה.")
+    # crop_steps are accepted but not judged: a crop at the edge of the wide picture still keeps the
+    # face inside the frame (crop_fraction clamps around it). Tried on a real run, the warning fired
+    # in nearly every clip and pointed at nothing visible, so it was dropped.
+    return out

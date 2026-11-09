@@ -81,3 +81,24 @@ Final: minor (deferred): clip end is not clamped to the media duration when no t
 Final: minor (deferred): each QA clip block repeats an H1 heading under its H2 (cosmetic)
 Final: Ruling: teaser plays the quote's video and audio first (plan reading); spec section 8 says the sentence is shown as text — kept the plan's reading, cost if wrong: a text-only teaser would need a different render path
 Final: Ruling: Windows MAX_PATH (project path plus 100-char clip name over 260 characters), chunk-boundary words with equal-duration splits, and `\{` escaping in ASS were not changed — speculative or chosen by the plan; cost if wrong: rare render or caption glitches, found only on real use
+
+## Round 2: first real run on a 75-minute Hebrew debate podcast (2026-11-09)
+
+Real run: download, Groq transcription (13,146 words), three subagents ranking windows, 10 clips, visual QA.
+
+### Added after user feedback
+- **Vertical crop by default** (`--reframe center`), with **face-aware crop** (`facecrop.py`, OpenCV YuNet model in `models/`): samples 10 fps, finds camera cuts by thumbnail difference, follows the face with the most mouth motion per shot, faceless shots borrow a neighbour crop. `--no-auto-crop` or a manual `crop_x` in `plan.json` overrides it. The model is read from bytes because OpenCV cannot open Hebrew paths.
+- **Edit plan** (`clipplan.py`, `render --plan plan.json`): per clip `parts` (word ranges joined in order, inner cuts), `crop_x`, `hook` (none/title/teaser) and `hook_text`. Reorder hooks are refused on joined parts.
+- **Caption preset `social`**: 112 px, two words per block, raised to 30% from the bottom, no outline, soft pop-in. `make_blocks` avoids dangling function words, breaks at pauses, closes gaps under 0.45 s, 0.45 s minimum, 0.06 s lead-in.
+- **Fades**: 0.25 s in, 0.4 s out (video and audio), 0.04 s audio fades at joins.
+- **Transcript correction**: `correct --glossary` (whole transcript, prefix-aware), `correct --edits` accepts several words or empty text (delete); indices never move. SKILL.md order: transcribe, web context and glossary, then pick clips.
+- **Continuity checks** (`check_parts`): render report warns about a part that opens on a connector word, ends mid-sentence, or is under 1.5 s. Podcast/debate guidance in `selection-criteria.md`.
+- `WebSearch` added to allowed tools (public terms only).
+
+### Open (from the independent review, not yet fixed)
+- No code creates the `.env` for the key and `setup --json` has no `key_present`; SKILL.md should forbid reading `.env`.
+- Retrying a transcription with gaps re-sends every chunk (no per-chunk cache); re-transcribing moves word indices.
+- `cleanup` deletes a downloaded video and the fingerprint includes mtime, so a re-download forces a new transcription.
+- `refine` replaces all clips on a second pass ("find more" renumbers).
+- Source is 720p; a vertical crop upscales it about 2.7x (the user chose to stay at 720p).
+- Exit code table vs code, selftest on every session, hook text not re-synced after `correct`, Whisper hallucination filtering and a vocabulary prompt, QA frame volume.

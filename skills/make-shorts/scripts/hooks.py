@@ -51,9 +51,14 @@ def verify_quote(quote: str, t: Transcript, start_word: int, end_word: int) -> b
     return find_quote(quote, t, start_word, end_word) is not None
 
 
-def plan_hook(clip: Clip, t: Transcript, mode: HookMode) -> HookPlan:
+def plan_hook(
+    clip: Clip, t: Transcript, mode: HookMode, segments: list[tuple[float, float]] | None = None
+) -> HookPlan:
+    """`segments` replaces the single (start, end) cut when the clip is built from several parts."""
     mode = HookMode(mode)
-    whole = [(clip.start, clip.end)]
+    whole = list(segments) if segments else [(clip.start, clip.end)]
+    if segments and len(segments) > 1 and mode is HookMode.REORDER:
+        raise UserFacingError("unknown", detail="הקדמת משפט לא נתמכת בקליפ שמורכב מכמה חלקים. אפשר טיזר במקום.")
     if mode is HookMode.NONE:
         return HookPlan(whole, None, None, False)
     if mode is HookMode.TITLE:
@@ -68,7 +73,7 @@ def plan_hook(clip: Clip, t: Transcript, mode: HookMode) -> HookPlan:
     quote_end = t.words[found[1]].end
 
     if mode is HookMode.TEASER:
-        return HookPlan([(quote_start, quote_end), (clip.start, clip.end)], None, clip.hook_text, False)
+        return HookPlan([(quote_start, quote_end), *whole], None, clip.hook_text, False)
 
     # REORDER: quote first, then everything else in its original order.
     if found[0] == clip.start_word:

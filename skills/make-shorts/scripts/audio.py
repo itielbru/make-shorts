@@ -93,3 +93,47 @@ def split_audio(audio: Path, chunks: list[tuple[float, float]], out_dir: Path) -
 
 def shift_words(words: list[Word], offset: float) -> list[Word]:
     return [Word(w.text, round(w.start + offset, 6), round(w.end + offset, 6)) for w in words]
+
+
+def quietest_in(energy: list[float], start: float, step: float = 0.01) -> float:
+    """Time of the quietest moment in an energy profile (one value per `step` seconds from `start`),
+    smoothed over three values so a single silent sample does not win over a real pause."""
+    if not energy:
+        return start
+    if len(energy) < 3:
+        return start + step * min(range(len(energy)), key=lambda i: energy[i])
+    smooth = [(energy[i - 1] + energy[i] + energy[i + 1]) / 3 for i in range(1, len(energy) - 1)]
+    best = min(range(len(smooth)), key=lambda i: smooth[i]) + 1
+    return start + best * step
+
+
+def waveform_quietest(src: Path, step: float = 0.01):
+    """A function (lo, hi) -> time of the quietest moment of the audio between lo and hi seconds.
+    Reads only that short window from the source, as 8 kHz mono samples.
+    None when numpy is missing: the caller then cuts by word timing and pauses alone."""
+    import subprocess
+
+    try:
+        import numpy as np
+    except ImportError:
+        return None
+
+    rate = 8000
+    hop = int(rate * step)
+
+    def quietest(lo: float, hi: float) -> float:
+        if hi - lo < 3 * step:
+            return (lo + hi) / 2
+        proc = subprocess.run(
+            ["ffmpeg", "-hide_banner", "-loglevel", "error", "-ss", f"{lo:.3f}", "-t", f"{hi - lo:.3f}",
+             "-i", str(src), "-vn", "-ac", "1", "-ar", str(rate), "-f", "s16le", "-"],
+            capture_output=True, timeout=60,
+        )
+        samples = np.frombuffer(proc.stdout, dtype=np.int16).astype(np.float32)
+        if proc.returncode != 0 or len(samples) < 3 * hop:
+            return (lo + hi) / 2
+        frames = samples[: len(samples) // hop * hop].reshape(-1, hop)
+        energy = [float(v) for v in np.sqrt(np.mean(frames ** 2, axis=1))]
+        return quietest_in(energy, lo + step / 2, step)
+
+    return quietest

@@ -235,6 +235,9 @@ def build_ffmpeg_cmd(
     cmd += ["-filter_complex", ";".join(parts), "-map", "[vout]"]
     if has_audio:
         cmd += ["-map", "[aout]"]
+    # constant frame rate at the source's rate: a variable-rate source (phone, Zoom) otherwise passes
+    # its uneven timestamps into the clip, which players and the timing check both trip on
+    cmd += ["-fps_mode", "cfr", "-r", f"{fps:g}"]
     cmd += ["-c:v", "libx264", "-preset", "medium", "-crf", "20", "-pix_fmt", "yuv420p"]
     if has_audio:
         cmd += ["-c:a", "aac", "-b:a", "192k"]

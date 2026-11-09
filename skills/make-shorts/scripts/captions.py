@@ -161,12 +161,16 @@ def make_blocks(words: list[Word], words_per_block: int = 3, breaks: list[float]
 
 def remap_words(words: list[Word], segments: list[tuple[float, float]]) -> list[Word]:
     """Move words onto the output timeline of a clip made from several segments."""
+    # A word belongs to the segment its middle falls in. The waveform cut may land a hair inside a
+    # word's (approximate) timing; requiring the whole word inside dropped heard words from captions.
     mapped: list[Word] = []
     out_offset = 0.0
     for a, b in segments:
         for w in words:
-            if w.text and w.start >= a - 1e-6 and w.end <= b + 1e-6:
-                mapped.append(Word(w.text, round(w.start - a + out_offset, 6), round(w.end - a + out_offset, 6)))
+            middle = (w.start + w.end) / 2
+            if w.text and a - 1e-6 <= middle <= b + 1e-6:
+                start, end = max(w.start, a), min(w.end, b)
+                mapped.append(Word(w.text, round(start - a + out_offset, 6), round(end - a + out_offset, 6)))
         out_offset += b - a
     return mapped
 

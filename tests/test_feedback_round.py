@@ -66,10 +66,13 @@ def test_parts_become_padded_time_segments_in_the_given_order():
 
 def test_adjacent_parts_that_touch_are_merged_into_one_segment():
     t = _transcript()
+    # parts with no word between them are one stretch: cut separately, their edge searches
+    # overlapped in the same pause and a slice of sound played twice (second code review)
     segs = clipplan.segments_from_parts(t, [(2, 5), (6, 9)])
-    assert len(segs) == 2  # a real cut between 5 and 6 is kept unless they are contiguous in time and index
+    assert len(segs) == 1
     segs = clipplan.segments_from_parts(t, [(2, 5), (5, 9)])
     assert len(segs) == 1
+    assert len(clipplan.segments_from_parts(t, [(2, 5), (7, 9)])) == 2  # a word left out: a real cut
 
 
 def test_bad_parts_are_rejected_in_hebrew():
@@ -698,7 +701,8 @@ def test_retime_words_moves_clip_captions_to_new_segment_edges():
     moved = captions.retime_words(words, [(10.0, 13.0), (20.0, 24.0)], [(10.4, 13.0), (19.0, 24.0)])
     assert [(w.text, round(w.start, 2)) for w in moved] == [("א", 0.1), ("ב", 1.8), ("ג", 6.1)]
     # a word that falls outside the new edges is dropped
-    gone = captions.retime_words(words, [(10.0, 13.0), (20.0, 24.0)], [(10.7, 13.0), (20.0, 24.0)])
+    # a word whose middle (10.7) is cut off is dropped; one cut a hair inside keeps its caption
+    gone = captions.retime_words(words, [(10.0, 13.0), (20.0, 24.0)], [(10.8, 13.0), (20.0, 24.0)])
     assert [w.text for w in gone] == ["ב", "ג"]
 
 

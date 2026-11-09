@@ -276,7 +276,10 @@ def render_findings(video_s: float, audio_s: float | None, duplicate_runs: list[
     if audio_s is not None and abs(video_s - audio_s) > AV_GAP_S:
         out.append(f"התמונה ({video_s:.1f} שניות) והקול ({audio_s:.1f} שניות) לא באותו אורך, אז הם לא מסונכרנים. זו תקלת רינדור.")
     for t, count in duplicate_runs:
-        out.append(f"התמונה נעצרת ב-{t:.1f} למשך {count} פריימים זהים, והקול ממשיך. זו תקלת רינדור.")
+        # a still title card or a variable-frame-rate source repeats frames too; only the
+        # comparison with the source tells which
+        out.append(f"התמונה נעצרת ב-{t:.1f} למשך {count} פריימים זהים, והקול ממשיך. "
+                   f"בדוק עם diagnose אם זה כך גם במקור; אם לא, זו תקלת רינדור.")
     return out
 
 
@@ -284,6 +287,8 @@ def sound_timestamp_findings(pts: list[float], frame_s: float) -> list[str]:
     """Sound packets must follow each other evenly (one AAC frame apart). Decoding to samples hides
     bad timestamps, but players follow them: seen in real clips, 2.4 s of sound stamped into 0.6 s
     and then a gap made the picture stall and drift from the sound."""
+    if len(pts) < 2:
+        return ["לא הצלחתי לקרוא את חותמות הזמן של הקול, אז הבדיקה לא רצה. אל תניח שהקליף תקין."]
     bad = [a for a, b in zip(pts, pts[1:-1]) if abs((b - a) - frame_s) > 0.25 * frame_s]
     if not bad:
         return []
@@ -294,6 +299,8 @@ def sound_timestamp_findings(pts: list[float], frame_s: float) -> list[str]:
 def picture_timestamp_findings(pts: list[float], frame_s: float) -> list[str]:
     """Picture frames must follow each other one frame apart (pts sorted into display order).
     A hole or a pile-up in them makes a player hold the picture or skip."""
+    if len(pts) < 2:
+        return ["לא הצלחתי לקרוא את חותמות הזמן של התמונה, אז הבדיקה לא רצה. אל תניח שהקליף תקין."]
     ordered = sorted(pts)
     bad = [a for a, b in zip(ordered, ordered[1:]) if abs((b - a) - frame_s) > 0.25 * frame_s]
     if not bad:

@@ -486,6 +486,8 @@ def cmd_render(args: argparse.Namespace) -> int:
             for warning in clipplan.check_parts(t, cplan.parts or [(clip.start_word, clip.end_word)]):
                 report.bullet(f"קליפ {clip_id}, שים לב: {warning}")
             if cplan.hook_text:
+                if cplan.parts and not clipplan.quote_in_parts(t, cplan.parts, cplan.hook_text):
+                    raise UserFacingError("hook_quote_not_verbatim")  # a teaser must be heard in the clip
                 clip = dataclasses.replace(clip, hook_text=cplan.hook_text)
             mode = HookMode(cplan.hook) if cplan.hook else hook_overrides.get(clip_id, default_hook)
             plan = plan_hook(clip, t, mode, segments=base_segments)
@@ -512,15 +514,24 @@ def cmd_render(args: argparse.Namespace) -> int:
                             report.bullet(f"קליפ {clip_id}: {sum(len(p) for p in push)} צילומים כמעט קפואים (מישהו מקשיב בשקט), הוספתי להם זום איטי.")
                         if any(split):
                             report.bullet(f"קליפ {clip_id}: {sum(len(s) for s in split)} צילומים רחבים של שניים, הוצגו במסך מפוצל (אחד למעלה ואחד למטה).")
-                        if len(trimmed) > 1:
-                            same = facecrop.same_shot_joins(Path(state.media_path), video)
+                    except Exception as err:  # keep the fixed crop rather than lose the clip
+                        report.bullet(f"קליפ {clip_id}: זיהוי הפנים נכשל ({type(err).__name__}), נעשה חיתוך מרכזי.")
+                    if len(plan.segments) > 1:
+                        try:
+                            same = facecrop.same_shot_joins(Path(state.media_path), video_segments or plan.segments)
                             zoom = facecrop.punch_in_zooms(same, strength=profile.punch_in)
                             if any(same) and profile.punch_in > 1.0:
                                 report.bullet(f"קליפ {clip_id}: {sum(same)} חיבורים בתוך אותו צילום, הוספתי זום קל כדי שלא ייראו כקפיצה.")
-                    except Exception as err:  # keep the fixed crop rather than lose the clip
-                        report.bullet(f"קליפ {clip_id}: זיהוי הפנים נכשל ({type(err).__name__}), נעשה חיתוך מרכזי.")
+                        except Exception as err:  # only the punch-in is lost; the face crop stays
+                            report.bullet(f"קליפ {clip_id}: בדיקת החיבורים נכשלה ({type(err).__name__}), בלי זום בחיבורים.")
                 else:
                     report.bullet("זיהוי פנים לא זמין (חסר OpenCV או קובץ המודל), נעשה חיתוך מרכזי.")
+            # every part a whole number of frames, picture and sound alike, so joins never drift apart
+            src_fps = facecrop._probe_fps(Path(state.media_path))
+            aligned = clipplan.frame_aligned(plan.segments, src_fps)
+            if video_segments is not None:
+                video_segments = clipplan.frame_aligned_video(aligned, plan.segments, video_segments, src_fps)
+            plan = dataclasses.replace(plan, segments=aligned)
             clip_words = None
             if args.recaptioned:
                 last = state.rendered.get(str(clip_id), {}).get("segments")
@@ -534,7 +545,7 @@ def cmd_render(args: argparse.Namespace) -> int:
                 font=args.font or profile.font, has_audio=state.has_audio, crop_x=crop,
                 caption_words=clip_words,
                 zoom=zoom, push=push, split=split, video_segments=video_segments,
-                fps=facecrop._probe_fps(Path(state.media_path)) if push else 25.0,
+                fps=src_fps,
                 fade_to_black=profile.fade_to_black, hide_bottom=args.hide_bottom,
             )
         except UserFacingError as err:
@@ -547,8 +558,8 @@ def cmd_render(args: argparse.Namespace) -> int:
         try:
             for finding in _render_check(final, state.has_audio):
                 report.missing(f"קליפ {clip_id}: {finding}")
-        except Exception as err:  # the check must never lose a rendered clip
-            report.bullet(f"קליפ {clip_id}: בדיקת הרינדור לא רצה ({type(err).__name__}).")
+        except Exception as err:  # the check must never lose a rendered clip, nor pass for clean
+            report.missing(f"קליפ {clip_id}: בדיקת הרינדור לא רצה ({type(err).__name__}), אז אין לדעת אם הקליף תקין.")
         if args.reframe == "center":
             try:
                 for finding in _motion_check(final, video_segments or plan.segments, crop, zoom):
@@ -909,6 +920,13 @@ def cmd_diagnose(args: argparse.Namespace) -> int:
 
 # ------------------------------------------------------------------ parser
 
+def _hide_share(value: str) -> float:
+    share = float(value)
+    if not 0.0 <= share <= 0.4:
+        raise argparse.ArgumentTypeError("--hide-bottom צריך להיות בין 0 ל-0.4 (חלק מגובה התמונה)")
+    return share
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="make_shorts.py")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -961,7 +979,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--plan", help="קובץ JSON עם תוכנית עריכה לכל קליפ: חלקים, מיקום חיתוך ופתיח")
 
     p.add_argument("--keep-cuts", action="store_true", help="לא להאריך חלקים עד סוף המשפט")
-    p.add_argument("--hide-bottom", type=float, default=0.0,
+    p.add_argument("--hide-bottom", type=_hide_share, default=0.0,
                    help="חלק מגובה התמונה שיוסתר למטה (למשל 0.17), כשבמקור כבר יש כתוביות צרובות")
     p.add_argument("--slow-zoom", action="store_true", help="זום איטי על צילומים כמעט קפואים לריצה הזו (ברירת המחדל בפרופיל: slow_zoom)")
     p.add_argument("--recaptioned",action="store_true", help="כתוביות מהתמלול החדש של כל קליפ (אחרי recaption ובדיקה)")

@@ -271,9 +271,17 @@ def snap_joins(
             shift = min(head)
         else:
             continue
+        # a short part between two joins could have both of its picture edges snapped to the same
+        # cut and vanish; never leave a part's picture shorter than SNAP_MIN_PICTURE_S
+        if (video[i][1] + shift - video[i][0] < SNAP_MIN_PICTURE_S
+                or video[i + 1][1] - (video[i + 1][0] + shift) < SNAP_MIN_PICTURE_S):
+            continue
         video[i][1] += shift
         video[i + 1][0] += shift
     return [(a, b) for a, b in video]
+
+
+SNAP_MIN_PICTURE_S = 0.5
 
 
 PUNCH_IN = 1.08  # 1.15 read as too strong; 8% still breaks the "same picture" jump

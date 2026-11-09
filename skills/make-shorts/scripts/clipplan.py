@@ -84,7 +84,9 @@ def segments_from_parts(
     for a, b in parts:
         if not (0 <= a <= b < n):
             raise _bad(f"טווח מילים לא תקין: {a}-{b}.")
-        if merged and a <= merged[-1][1] and a >= merged[-1][0]:
+        # parts that touch (finish_sentences extends a part up to the word before the next one) are
+        # one stretch; cut separately, their edge searches overlapped and the sound repeated
+        if merged and merged[-1][0] <= a <= merged[-1][1] + 1:
             merged[-1] = (merged[-1][0], max(merged[-1][1], b))
         else:
             merged.append((a, b))
@@ -114,6 +116,38 @@ def segments_from_parts(
             end = last.end + TAIL_S
         out.append((round(max(0.0, start), 3), round(end, 3)))
     return out
+
+
+def frame_aligned(segments: list[tuple[float, float]], fps: float) -> list[tuple[float, float]]:
+    """Each segment's length rounded to whole frames, keeping its start. The picture of a part is a
+    whole number of frames; with picture and sound joined separately, a sound part longer or shorter
+    by a fraction of a frame would add up over the joins into a lip-sync drift."""
+    out = []
+    for a, b in segments:
+        frames = max(1, round((b - a) * fps))
+        out.append((a, round(a + frames / fps, 6)))
+    return out
+
+
+def frame_aligned_video(
+    aligned: list[tuple[float, float]], audio: list[tuple[float, float]],
+    video: list[tuple[float, float]], fps: float,
+) -> list[tuple[float, float]]:
+    """Picture edges matching frame-aligned sound edges. At an L-cut the picture's edge sits some
+    frames away from the sound's; that offset is kept, rounded to whole frames, so each picture part
+    is a whole number of frames and the picture and sound totals stay exactly equal."""
+    offsets = [0.0]
+    for (_, a_end), (_, v_end) in zip(audio[:-1], video[:-1]):
+        offsets.append(round((v_end - a_end) * fps) / fps)
+    offsets.append(0.0)
+    return [(round(a + offsets[i], 6), round(b + offsets[i + 1], 6)) for i, (a, b) in enumerate(aligned)]
+
+
+def quote_in_parts(t: Transcript, parts: list[tuple[int, int]], quote: str) -> bool:
+    """Is the quote, word for word, inside one of the parts the clip plays (not in a gap between them)?"""
+    from hooks import find_quote
+
+    return any(find_quote(quote, t, a, b) is not None for a, b in parts)
 
 
 def crop_for_segments(

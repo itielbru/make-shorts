@@ -492,13 +492,14 @@ def cmd_render(args: argparse.Namespace) -> int:
             preset_name = args.preset or profile.caption_preset
             zoom = None
             push = None
+            split = None
             video_segments = None
             crop = clipplan.crop_for_segments(plan.segments, base_segments or [(clip.start, clip.end)], cplan.crop_x)
             if not cplan.crop_x and args.reframe == "center" and not args.no_auto_crop:
                 if facecrop.available():
                     progress(f"קליפ {clip_id}: מזהה פנים ומחליט איפה לחתוך...")
                     try:
-                        trimmed, video, crop, push = facecrop.auto_crops(
+                        trimmed, video, crop, push, split = facecrop.auto_crops(
                             Path(state.media_path), plan.segments, ws.path, words=t.words
                         )
                         plan = dataclasses.replace(plan, segments=trimmed)
@@ -509,6 +510,8 @@ def cmd_render(args: argparse.Namespace) -> int:
                             push = None  # off by default: on a talking podcast it read as too strong
                         elif any(push):
                             report.bullet(f"קליפ {clip_id}: {sum(len(p) for p in push)} צילומים כמעט קפואים (מישהו מקשיב בשקט), הוספתי להם זום איטי.")
+                        if any(split):
+                            report.bullet(f"קליפ {clip_id}: {sum(len(s) for s in split)} צילומים רחבים של שניים, הוצגו במסך מפוצל (אחד למעלה ואחד למטה).")
                         if len(trimmed) > 1:
                             same = facecrop.same_shot_joins(Path(state.media_path), video)
                             zoom = facecrop.punch_in_zooms(same, strength=profile.punch_in)
@@ -530,9 +533,9 @@ def cmd_render(args: argparse.Namespace) -> int:
                 out_dir=out_dir, title=clip.title, index=clip_id,
                 font=args.font or profile.font, has_audio=state.has_audio, crop_x=crop,
                 caption_words=clip_words,
-                zoom=zoom, push=push, video_segments=video_segments,
+                zoom=zoom, push=push, split=split, video_segments=video_segments,
                 fps=facecrop._probe_fps(Path(state.media_path)) if push else 25.0,
-                fade_to_black=profile.fade_to_black,
+                fade_to_black=profile.fade_to_black, hide_bottom=args.hide_bottom,
             )
         except UserFacingError as err:
             report.missing(f"קליפ {clip_id} ({clip.title}): {err.message_he}")
@@ -588,9 +591,40 @@ def measure_render(path: Path, has_audio: bool = True):
     return len(frames) / fps, audio_s, diffs, fps
 
 
+def _packet_times(path: Path, stream: str) -> list[float]:
+    """Timestamps of a stream's packets, as a player reads them from the file."""
+    import subprocess
+
+    out = subprocess.run(["ffprobe", "-v", "error", "-select_streams", stream, "-show_entries", "packet=pts_time",
+                          "-of", "csv=p=0", str(path)], capture_output=True, text=True, timeout=300).stdout.split()
+    return [float(v.strip(",")) for v in out if v.strip(",") not in ("", "N/A")]
+
+
+def _sound_packet_times(path: Path) -> tuple[list[float], float]:
+    import subprocess
+
+    rate = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "a:0", "-show_entries", "stream=sample_rate",
+                           "-of", "csv=p=0", str(path)], capture_output=True, text=True, timeout=60).stdout.strip()
+    try:
+        frame_s = 1024 / float(rate)
+    except ValueError:
+        frame_s = 1024 / 48000
+    return _packet_times(path, "a:0"), frame_s
+
+
 def _render_check(final: Path, has_audio: bool) -> list[str]:
+    """Faults the render can cause, measured the way a player meets the file: lengths, held frames,
+    and the timestamps of every packet. Decoding to samples or frames hides bad timestamps (seen: a
+    clip whose samples were perfect stalled in every player), so the timestamps are read directly."""
     video_s, audio_s, diffs, fps = measure_render(final, has_audio)
-    return qa.render_findings(video_s, audio_s, qa.duplicate_runs(diffs, fps))
+    found = qa.render_findings(video_s, audio_s, qa.duplicate_runs(diffs, fps))
+    video_pts = _packet_times(final, "v:0")
+    found += qa.picture_timestamp_findings(video_pts, 1 / fps)
+    if has_audio:
+        pts, frame_s = _sound_packet_times(final)
+        found += qa.sound_timestamp_findings(pts, frame_s)
+        found += qa.start_findings(min(video_pts) if video_pts else 0.0, min(pts) if pts else None)
+    return found
 
 
 def _motion_check(final: Path, segments, crop, zoom) -> list[str]:
@@ -927,6 +961,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--plan", help="קובץ JSON עם תוכנית עריכה לכל קליפ: חלקים, מיקום חיתוך ופתיח")
 
     p.add_argument("--keep-cuts", action="store_true", help="לא להאריך חלקים עד סוף המשפט")
+    p.add_argument("--hide-bottom", type=float, default=0.0,
+                   help="חלק מגובה התמונה שיוסתר למטה (למשל 0.17), כשבמקור כבר יש כתוביות צרובות")
     p.add_argument("--slow-zoom", action="store_true", help="זום איטי על צילומים כמעט קפואים לריצה הזו (ברירת המחדל בפרופיל: slow_zoom)")
     p.add_argument("--recaptioned",action="store_true", help="כתוביות מהתמלול החדש של כל קליפ (אחרי recaption ובדיקה)")
 

@@ -56,8 +56,35 @@ def test_render_check_flags_repeated_frames():
     assert "3.2" in text and "4" in text
 
 
+def test_render_check_flags_bunched_sound_timestamps():
+    frame = 1024 / 48000
+    clean = [k * frame for k in range(200)]
+    bunched = [0.0, 0.021, 0.08533, 0.08535, 0.08537, 0.08540, 0.64, 3.0] + [3.0 + k * frame for k in range(1, 50)]
+    assert qa.sound_timestamp_findings(clean, frame) == []
+    text = " ".join(qa.sound_timestamp_findings(bunched, frame))
+    assert "0.1" in text or "0.0" in text
+
+
+def test_render_check_flags_uneven_picture_timestamps():
+    frame = 1 / 25
+    clean = [k * frame for k in range(100)]
+    held = clean[:40] + [clean[39] + 0.2 + k * frame for k in range(60)]  # a 0.2 s hole: the picture stalls
+    assert qa.picture_timestamp_findings(clean, frame) == []
+    assert qa.picture_timestamp_findings(held, frame)
+
+
+def test_render_check_flags_sound_and_picture_starting_apart():
+    assert qa.start_findings(video_start=0.0, audio_start=-0.021) == []  # AAC priming is normal
+    assert qa.start_findings(video_start=0.0, audio_start=0.4)
+
+
 def test_render_check_is_quiet_for_a_clean_clip():
     assert qa.render_findings(video_s=62.12, audio_s=62.2, duplicate_runs=[]) == []
+
+
+def test_a_still_but_living_picture_is_not_counted_as_repeated_frames():
+    # measured in a real still shot at ~1 Mbps: the source itself changes only 0.02-0.05 per frame
+    assert qa.duplicate_runs([0.05, 0.02, 0.04, 0.03, 0.02, 0.04], fps=25.0) == []
 
 
 def test_duplicate_runs_are_found_in_a_list_of_frame_differences():
@@ -206,6 +233,9 @@ def test_a_punched_in_multi_part_render_is_vertical_and_in_sync(tmp_path):
     assert _probe(out, "width,height") == ["1080", "1920"]
     video = float(_probe(out, "duration")[0])
     assert video == pytest.approx(4.0, abs=0.05) and _sound_seconds(out) == pytest.approx(4.0, abs=0.08)
+    # standard 48 kHz sound: loudnorm works at 192 kHz inside and the clips came out at 96 kHz,
+    # which players on phones and weak computers handle badly (a stuck or out-of-sync start)
+    assert _probe(out, "sample_rate", "a:0") == ["48000"]
 
 
 def _sound_seconds(path):
@@ -214,6 +244,54 @@ def _sound_seconds(path):
     raw = subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-i", str(path), "-vn", "-ac", "1",
                           "-ar", "8000", "-f", "s16le", "-"], capture_output=True, check=True).stdout
     return len(raw) / 2 / 8000
+
+
+@needs_ffmpeg
+def test_hide_bottom_pushes_burned_in_captions_out_of_the_frame(tmp_path):
+    # a source with a white band in its bottom 15% (burned-in captions) over a red picture
+    src = tmp_path / "src.mp4"
+    subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+                    "-f", "lavfi", "-i", "color=c=red:s=640x360:r=25:d=2", "-f", "lavfi", "-i", "sine=d=2",
+                    "-vf", "drawbox=x=0:y=306:w=640:h=54:color=white:t=fill",
+                    "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", str(src)], check=True)
+    out = _render(tmp_path, src, [(0.0, 2.0)], reframe="center", crop_x=[0.5], hide_bottom=0.17)
+    assert _probe(out, "width,height") == ["1080", "1920"]
+    raw = subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-ss", "1", "-i", str(out), "-frames:v", "1",
+                          "-vf", "crop=1080:40:0:1880,scale=1:1,format=rgb24", "-f", "rawvideo", "-"],
+                         capture_output=True, check=True).stdout
+    r, g, b = raw[:3]
+    assert r > 150 and g < 100  # the bottom of the frame is picture (red), not the white caption band
+
+
+def test_hide_bottom_combines_with_a_punch_in_and_never_shows_the_band():
+    graph = render.build_ffmpeg_cmd("in.mp4", [(0.0, 2.0), (3.0, 5.0)], ass_name="c.ass", reframe="center",
+                                    out_name="o.mp4", crop_x=[0.5, 0.5], zoom=[1.0, 1.08], hide_bottom=0.17)
+    graph = graph[graph.index("-filter_complex") + 1]
+    # base zoom 1/(1-0.17) on every part, the punch-in on top of it
+    assert "scale=-2:2314" in graph and "scale=-2:2498" in graph
+    assert "min((ih-1920)*0.3,ih*0.83-1920)" in graph
+
+
+@needs_ffmpeg
+@pytest.mark.parametrize("segments", [
+    [(0.2, 2.4), (3.3, 5.1), (6.0, 8.6)],   # several parts: where the bug was seen
+    [(0.5, 8.0)],                          # one part: had a single 70 ms hole near the end
+], ids=["multi-part", "single-part"])
+def test_a_rendered_clip_has_evenly_spaced_timestamps_a_player_can_follow(tmp_path, segments):
+    # seen in real clips made of several parts: 116 sound packets (2.4 s) stamped into the first
+    # 0.6 s, then a gap. Decoding hides it, but players follow the timestamps: the picture stalls
+    # and drifts from the sound. Every AAC packet is 1024 samples, 21.3 ms at 48 kHz.
+    import make_shorts
+
+    src = tmp_path / "src.mp4"
+    _make_source(src, [("red", 3), ("blue", 3), ("green", 3)])
+    out = _render(tmp_path, src, segments, reframe="center", crop_x=[0.5] * len(segments))
+    pts, frame_s = make_shorts._sound_packet_times(out)
+    steps = [b - a for a, b in zip(pts, pts[1:])]
+    assert all(abs(s - frame_s) < 0.002 for s in steps[:-1]), sorted(steps)[:3] + sorted(steps)[-3:]
+    # the source here is solid colour, so its frames really repeat; only the timing checks must stay quiet
+    timing = [f for f in make_shorts._render_check(out, True) if "חותמות" in f or "מתחילים" in f]
+    assert timing == []
 
 
 @needs_ffmpeg

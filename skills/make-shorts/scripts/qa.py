@@ -246,7 +246,9 @@ MIN_SHOT_S = 1.0
 
 
 AV_GAP_S = 0.15        # a frame or two of padding is normal; the L-cut bug gave half a second
-DUPLICATE_DIFF = 0.05  # mean grey difference of a repeated frame (a still face in the source is ~0.2)
+# Mean grey difference of a frame the render repeated: identical, so ~0. A still shot in a ~1 Mbps
+# source was measured at 0.02-0.05 per frame and must not count, or the check blames the render.
+DUPLICATE_DIFF = 0.005
 
 
 def duplicate_runs(diffs: list[float], fps: float, min_run: int = 2) -> list[tuple[float, int]]:
@@ -276,6 +278,38 @@ def render_findings(video_s: float, audio_s: float | None, duplicate_runs: list[
     for t, count in duplicate_runs:
         out.append(f"התמונה נעצרת ב-{t:.1f} למשך {count} פריימים זהים, והקול ממשיך. זו תקלת רינדור.")
     return out
+
+
+def sound_timestamp_findings(pts: list[float], frame_s: float) -> list[str]:
+    """Sound packets must follow each other evenly (one AAC frame apart). Decoding to samples hides
+    bad timestamps, but players follow them: seen in real clips, 2.4 s of sound stamped into 0.6 s
+    and then a gap made the picture stall and drift from the sound."""
+    bad = [a for a, b in zip(pts, pts[1:-1]) if abs((b - a) - frame_s) > 0.25 * frame_s]
+    if not bad:
+        return []
+    return [f"חותמות הזמן של הקול לא אחידות ({len(bad)} מקומות, הראשון ב-{bad[0]:.1f}), "
+            "ולכן נגנים עלולים לעצור את התמונה או לאבד סנכרון. זו תקלת רינדור."]
+
+
+def picture_timestamp_findings(pts: list[float], frame_s: float) -> list[str]:
+    """Picture frames must follow each other one frame apart (pts sorted into display order).
+    A hole or a pile-up in them makes a player hold the picture or skip."""
+    ordered = sorted(pts)
+    bad = [a for a, b in zip(ordered, ordered[1:]) if abs((b - a) - frame_s) > 0.25 * frame_s]
+    if not bad:
+        return []
+    return [f"חותמות הזמן של התמונה לא אחידות ({len(bad)} מקומות, הראשון ב-{bad[0]:.1f}), "
+            "ולכן נגנים עלולים לעצור את התמונה או לדלג. זו תקלת רינדור."]
+
+
+AV_START_GAP_S = 0.1  # AAC adds ~21 ms of priming before 0; more than this is a real offset
+
+
+def start_findings(video_start: float, audio_start: float | None) -> list[str]:
+    if audio_start is None or abs(video_start - audio_start) <= AV_START_GAP_S:
+        return []
+    return [f"התמונה והקול מתחילים בזמנים שונים ({video_start:.2f} מול {audio_start:.2f}), "
+            "ולכן הקליף יתחיל לא מסונכרן. זו תקלת רינדור."]
 
 
 JOIN_CUT_TOLERANCE_S = 0.15

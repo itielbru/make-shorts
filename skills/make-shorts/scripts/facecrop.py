@@ -28,6 +28,8 @@ class FaceCluster:
     width: float     # face width as a fraction of the frame width
     frames: int      # in how many sampled frames this face was seen
     motion: float    # summed mouth-region motion over those frames
+    yaw: float = 0.0  # summed turn of the face: nose offset from between the eyes, in eye-widths (+ = right)
+    cy: float = 0.0   # summed vertical centre of the face, 0..1 of the frame height
 
 
 def available() -> bool:
@@ -39,11 +41,47 @@ def available() -> bool:
     return MODEL_PATH.exists()
 
 
-def crop_fraction(face_cx: float, aspect: float) -> float:
-    """Where (0 = far left, 1 = far right) the vertical window must sit to centre a face at `face_cx`."""
+# Lead room: a face turned to one side sits off-centre, with the empty space on the side it looks
+# and talks toward, the way a camera operator frames it. Measured on a real podcast: a close-up
+# turned toward the other speaker is +0.35..+0.46 eye-widths, a face into the camera +0.08.
+LEAD_ROOM = 0.14   # how far off centre (share of the frame width) a fully turned face moves
+YAW_FULL = 0.4     # a turn this big gets the full lead room
+YAW_DEAD = 0.15    # below this the face counts as looking into the camera
+
+
+def lead_for(yaw: float) -> float:
+    """How far left (+) or right (-) of centre to place a face with this average turn."""
+    if abs(yaw) < YAW_DEAD:
+        return 0.0
+    return LEAD_ROOM * max(-1.0, min(1.0, yaw / YAW_FULL))
+
+
+def crop_fraction(face_cx: float, aspect: float, lead: float = 0.0) -> float:
+    """Where (0 = far left, 1 = far right) the vertical window must sit so that a face at `face_cx`
+    lands at `0.5 - lead` of the window's width (centred when lead is 0)."""
     scaled_w = OUT_H * aspect
-    x = face_cx * scaled_w - OUT_W / 2
+    x = face_cx * scaled_w - (0.5 - lead) * OUT_W
     return round(min(1.0, max(0.0, x / (scaled_w - OUT_W))), 3)
+
+
+# Wide shots of two people: a vertical crop holds only one of them, and at this size the picture
+# cannot tell who speaks (measured: the listener's "mouth motion" came out higher than the speaker's,
+# and matching mouth motion to the sound was too weak to trust). Such shots become a split screen.
+WIDE_FACE_MAX = 0.07     # faces narrower than this share of the width: a wide shot (close-ups measured 0.09-0.11)
+WIDE_MIN_APART = 0.3     # the two faces at least this far apart (measured 0.6)
+WIDE_MIN_SEEN = 0.5      # each face seen in at least half the sampled frames
+SPLIT_MIN_S = 1.0        # shorter wide shots are not worth a layout change
+
+
+def wide_pair(clusters: list[FaceCluster], total_frames: int) -> tuple[FaceCluster, FaceCluster] | None:
+    """The two people of a wide two-shot, left one first, or None for any other shot."""
+    seen = [c for c in clusters if c.frames >= max(1, WIDE_MIN_SEEN * total_frames)]
+    if len(seen) < 2:
+        return None
+    a, b = sorted(seen, key=lambda c: c.width, reverse=True)[:2]
+    if max(a.width, b.width) >= WIDE_FACE_MAX or abs(a.cx - b.cx) < WIDE_MIN_APART:
+        return None
+    return (a, b) if a.cx < b.cx else (b, a)
 
 
 def choose_subject(clusters: list[FaceCluster], total_frames: int) -> FaceCluster | None:
@@ -298,19 +336,24 @@ def _detector():
     return cv2.FaceDetectorYN.create("onnx", buffer, np.empty(0, dtype=np.uint8), (FRAME_WIDTH, 270), 0.6, 0.3, 5000)
 
 
-def _clusters_for_shot(frames: list[list[tuple[float, float, float]]]) -> list[FaceCluster]:
+def _clusters_for_shot(frames: list[list[tuple]]) -> list[FaceCluster]:
+    """Group the faces of a shot by position. Each face is (cx, width, motion[, yaw, cy])."""
     clusters: list[FaceCluster] = []
     for faces in frames:
-        for cx, width, motion in faces:
+        for face in faces:
+            cx, width, motion = face[:3]
+            yaw, cy = (face[3], face[4]) if len(face) >= 5 else (0.0, 0.0)
             target = next((c for c in clusters if abs(c.cx - cx) < 0.08), None)
             if target is None:
-                clusters.append(FaceCluster(cx, width, 1, motion))
+                clusters.append(FaceCluster(cx, width, 1, motion, yaw, cy))
             else:
                 n = target.frames
                 target.cx = (target.cx * n + cx) / (n + 1)
                 target.width = (target.width * n + width) / (n + 1)
                 target.frames = n + 1
                 target.motion += motion
+                target.yaw += yaw
+                target.cy += cy
     return clusters
 
 
@@ -340,9 +383,10 @@ def shot_motion(src: Path, start: float, end: float, cuts: list[float]) -> list[
 def analyze_segment(
     src: Path, start: float, end: float, ws_path: Path, index: int, fps: float = 25.0,
     head: float | None = None, tail: float | None = None,
-) -> tuple[float, float, list[tuple[float, float]], list[tuple[float, float]]]:
-    """(new start, new end, crop steps, still intervals) for one rendered segment; times are
-    relative to the new start.
+):
+    """(new start, new end, crop steps, still intervals, split intervals) for one rendered segment;
+    times are relative to the new start. A split interval is (start, end, (cx, cy) of the left
+    person, (cx, cy) of the right one): a wide two-shot shown as a top/bottom split screen.
 
     Cuts are found at the exact frame, so the crop switches together with the picture,
     and a segment that starts or ends a few frames into another shot is trimmed to the cut.
@@ -366,7 +410,7 @@ def analyze_segment(
     frames = sorted(out_dir.glob("*.jpg"))
     if result.returncode != 0 or not frames:
         shutil.rmtree(out_dir, ignore_errors=True)
-        return start, end, [(0.0, 0.5)], stills
+        return start, end, [(0.0, 0.5)], stills, []
     detector = _detector()
     shots: list[list[list[tuple[float, float, float]]]] = [[] for _ in range(len(cuts) + 1)]
     boundaries = [0.0] + cuts
@@ -396,7 +440,10 @@ def analyze_segment(
                 y0, y1 = int(max(0, my - 0.25 * fw)), int(min(h, my + 0.25 * fw))
                 if x1 > x0 and y1 > y0:
                     motion = float(np.mean(np.abs(gray[y0:y1, x0:x1].astype(np.float32) - previous_gray[y0:y1, x0:x1])))
-            found.append(((x + fw / 2) / w, fw / w, motion))
+            # the turn of the face: how far the nose sits from the point between the eyes
+            ex1, ex2, nose = float(f[4]), float(f[6]), float(f[8])
+            yaw = (nose - (ex1 + ex2) / 2) / max(1.0, abs(ex1 - ex2))
+            found.append(((x + fw / 2) / w, fw / w, motion, yaw, (y + fh / 2) / h))
         shots[which[i]].append(found)
         previous_gray = gray.astype(np.float32)
     shutil.rmtree(out_dir, ignore_errors=True)
@@ -404,10 +451,21 @@ def analyze_segment(
     duration = end - start
     ends = boundaries[1:] + [duration]
     raw: list[tuple[float, float, float | None]] = []
+    splits: list[tuple[float, float, tuple[float, float], tuple[float, float]]] = []
     for s_start, s_end, frame_faces in zip(boundaries, ends, shots):
-        subject = choose_subject(_clusters_for_shot(frame_faces), total_frames=len(frame_faces))
-        raw.append((s_start, s_end, crop_fraction(subject.cx, aspect) if subject else None))
-    return start, end, steps_from_shots(fill_faceless(raw)), stills
+        clusters = _clusters_for_shot(frame_faces)
+        pair = wide_pair(clusters, total_frames=len(frame_faces))
+        if pair and s_end - s_start >= SPLIT_MIN_S:
+            left, right = pair
+            splits.append((round(s_start, 3), round(s_end, 3),
+                           (round(left.cx, 3), round(left.cy / left.frames, 3)),
+                           (round(right.cx, 3), round(right.cy / right.frames, 3))))
+            raw.append((s_start, s_end, None))  # hidden under the split; keeps the neighbour's crop
+            continue
+        subject = choose_subject(clusters, total_frames=len(frame_faces))
+        lead = lead_for(subject.yaw / subject.frames) if subject else 0.0
+        raw.append((s_start, s_end, crop_fraction(subject.cx, aspect, lead) if subject else None))
+    return start, end, steps_from_shots(fill_faceless(raw)), stills, splits
 
 
 EXTEND_REACH_S = 1.5   # how far a clip edge may move outwards, into silence, to meet a camera cut
@@ -481,4 +539,4 @@ def auto_crops(src: Path, segments: list[tuple[float, float]], ws_path: Path, wo
         cuts.append([round(c - s, 4) for c in found if s < c < e])
     video = [(round(s, 3), round(e, 3)) for s, e in snap_joins(audio, cuts)]
     results = [analyze_segment(src, s, e, ws_path, i, fps, head=0.0, tail=0.0) for i, (s, e) in enumerate(video)]
-    return audio, video, [r[2] for r in results], [r[3] for r in results]
+    return audio, video, [r[2] for r in results], [r[3] for r in results], [r[4] for r in results]

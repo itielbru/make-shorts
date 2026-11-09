@@ -69,6 +69,34 @@ def push_filter(intervals: list[tuple[float, float]], fps: float = 25.0) -> str:
     )
 
 
+PANEL_H = 0.5  # each half of a split screen shows this share of the source's height around a face
+FACE_IN_PANEL = 0.4  # the face's height inside its half, from the top
+
+
+def _switch(intervals: list, values: list[float]) -> str:
+    """An expression of t that takes values[k] inside intervals[k] (and the last value elsewhere)."""
+    expr = f"{values[-1]:g}"
+    for interval, v in zip(reversed(intervals[:-1]), reversed(values[:-1])):
+        expr = f"if(between(t,{interval[0]:g},{interval[1]:g}),{v:g},{expr})"
+    return expr
+
+
+def split_chain(i: int, intervals: list, hide_bottom: float = 0.0, zoom: float = 1.0) -> str:
+    """A top/bottom split screen from the wide picture `[w{i}]`: the left person on top, the right one
+    below, each a 1080x960 crop around the face. Labelled `[s{i}]`. `zoom` is the part's punch-in:
+    it tightens the halves too, or a join between two wide parts shows both people jumping in place."""
+    share = PANEL_H / max(1.0, zoom)
+
+    def panel(person: int) -> str:
+        cx = _switch(intervals, [iv[2 + person][0] for iv in intervals])
+        cy = _switch(intervals, [iv[2 + person][1] for iv in intervals])
+        bottom = f"ih*{1 - hide_bottom:g}-oh"
+        return (f"crop=w='ih*{share:g}*1080/960':h='ih*{share:g}':"
+                f"x='min(max(({cx})*iw-ow/2,0),iw-ow)':y='min(max(({cy})*ih-{FACE_IN_PANEL:g}*oh,0),{bottom})',"
+                "scale=1080:960,setsar=1")
+    return f"[w{i}]split=2[pa{i}][pb{i}];[pa{i}]{panel(0)}[ta{i}];[pb{i}]{panel(1)}[tb{i}];[ta{i}][tb{i}]vstack[s{i}]"
+
+
 def build_ffmpeg_cmd(
     src: str,
     segments: list[tuple[float, float]],
@@ -84,6 +112,8 @@ def build_ffmpeg_cmd(
     push: list[list[tuple[float, float]]] | None = None,
     fps: float = 25.0,
     fade_to_black: bool = False,
+    hide_bottom: float = 0.0,
+    split: list[list[tuple]] | None = None,
 ) -> list[str]:
     """`crop_x` (0..1, one per segment or one for all) places the vertical crop in `center` mode.
     `zoom` (one per segment, 1.0 = none) punches in on a segment; the crop then keeps the upper
@@ -104,6 +134,9 @@ def build_ffmpeg_cmd(
     total = sum(b - a for a, b in segments)
     fade_in = min(FADE_IN_S, total / 4)
     fade_out = min(FADE_OUT_S, total / 4)
+    # hide_bottom: the share of the picture's height to keep out of the frame, for captions the
+    # source already has burned in. A zoom of 1/(1-hide) on every part, with the crop held high.
+    keep_zoom = 1.0 / (1.0 - hide_bottom) if 0 < hide_bottom < 0.5 else 1.0
     xs = crop_x if isinstance(crop_x, list) else [0.5 if crop_x is None else crop_x]
     xs = xs or [0.5]
     parts: list[str] = []
@@ -122,15 +155,27 @@ def build_ffmpeg_cmd(
             atrim = f"atrim=start={a - bases[i]:g}:end={b - bases[i]:g},asetpts=PTS-STARTPTS"
         if centered:
             cx = xs[min(i, len(xs) - 1)]
-            z = zoom[i] if zoom and i < len(zoom) else 1.0
+            z = (zoom[i] if zoom and i < len(zoom) else 1.0) * keep_zoom
             height = 1920 if z <= 1.0 else int(round(1920 * z / 2)) * 2
             y = "0" if z <= 1.0 else "(ih-1920)*0.3"
+            if hide_bottom > 0:  # never let the hidden strip back into the frame
+                y = f"min((ih-1920)*0.3,ih*{1 - hide_bottom:g}-1920)"
             stills = push[i] if push and i < len(push) else []
             slow = f",{push_filter(stills, fps)}" if stills else ""
+            wide = split[i] if split and i < len(split) else []
+            source, out = f"[{i}:v]{vtrim}", f"[v{i}]"
+            if wide:  # the same picture feeds both the crop and the split screen drawn over it
+                parts.append(f"[{i}:v]{vtrim}split=2[b{i}][w{i}]")
+                source, out = f"[b{i}]", f"[m{i}]"
             if isinstance(cx, list):
-                parts.append(f"[{i}:v]{vtrim}scale=-2:{height},crop=1080:1920:x='{crop_x_expression(cx)}':y='{y}'{slow},setsar=1[v{i}]")
+                parts.append(f"{source}scale=-2:{height},crop=1080:1920:x='{crop_x_expression(cx)}':y='{y}'{slow},setsar=1{out}")
             else:
-                parts.append(f"[{i}:v]{vtrim}scale=-2:{height},crop=1080:1920:(iw-1080)*{cx:g}:{y}{slow},setsar=1[v{i}]")
+                y_arg = f"'{y}'" if "," in y else y  # a comma would end the filter's argument
+                parts.append(f"{source}scale=-2:{height},crop=1080:1920:(iw-1080)*{cx:g}:{y_arg}{slow},setsar=1{out}")
+            if wide:
+                parts.append(split_chain(i, wide, hide_bottom, zoom[i] if zoom and i < len(zoom) else 1.0))
+                enable = "+".join(f"between(t,{iv[0]:g},{iv[1]:g})" for iv in wide)
+                parts.append(f"[m{i}][s{i}]overlay=0:0:enable='{enable}',setsar=1[v{i}]")
             vlabels.append(f"[v{i}]")
         elif vtrim:
             parts.append(f"[{i}:v]{vtrim.rstrip(',')}[v{i}]")
@@ -178,7 +223,12 @@ def build_ffmpeg_cmd(
         parts.append(f"{vin}{captions}")
     if has_audio:
         parts.append(
-            f"{ain}loudnorm=I={loudnorm_i:g}:TP=-1.5:LRA=11,"
+            # loudnorm works at 192 kHz inside; back to the standard 48 kHz, or the clip ships at
+            # 96 kHz and players on phones and weak computers stutter or drift at the start
+            # asetpts=N/SR/TB: fresh timestamps from the sample count. After concat and loudnorm the
+            # first seconds of a multi-part clip came out stamped into 0.6 s followed by a gap; the
+            # samples were right, but players follow timestamps, so the picture stalled and drifted.
+            f"{ain}loudnorm=I={loudnorm_i:g}:TP=-1.5:LRA=11,aresample=48000,asetpts=N/SR/TB,"
             f"afade=t=in:st=0:d={fade_in:g},afade=t=out:st={total - fade_out:g}:d={fade_out:g}[aout]"
         )
 
@@ -213,6 +263,8 @@ def render_clip(
     video_segments: list[tuple[float, float]] | None = None,
     fps: float = 25.0,
     fade_to_black: bool = False,
+    hide_bottom: float = 0.0,
+    split: list[list[tuple]] | None = None,
 ) -> Path:
     """Render one clip into out_dir and return the final file path.
 
@@ -234,9 +286,14 @@ def render_clip(
         joins.append(acc)
     on_clip = [w for w in caption_words if w.text] if caption_words is not None else remap_words(words, plan.segments)
     blocks = make_blocks(on_clip, PRESETS[preset].words_per_block, breaks=joins)
+    # split screens on the clip's own timeline (picture edges, which differ from the sound's at an L-cut)
+    seam, offset = [], 0.0
+    for i, (a, b) in enumerate(video_segments or plan.segments):
+        seam += [(offset + iv[0], offset + iv[1]) for iv in (split[i] if split and i < len(split) else [])]
+        offset += b - a
     ass_name = f"clip{index:02d}.ass"
     (ws.path / ass_name).write_text(
-        build_ass(blocks, preset=preset, font=font, title_text=plan.title_text), encoding="utf-8"
+        build_ass(blocks, preset=preset, font=font, title_text=plan.title_text, seam=seam), encoding="utf-8"
     )
 
     out_name = f"out{index:02d}.mp4"
@@ -244,7 +301,7 @@ def render_clip(
     cmd = build_ffmpeg_cmd(
         str(src), plan.segments, ass_name=ass_name, reframe=reframe, out_name=out_name,
         has_audio=has_audio, crop_x=crop_x, zoom=zoom, push=push, video_segments=video_segments, fps=fps,
-        fade_to_black=fade_to_black,
+        fade_to_black=fade_to_black, hide_bottom=hide_bottom, split=split,
     )
     result = run_text(cmd, timeout=max(600.0, total * 20), cwd=ws.path)
     if result.returncode != 0:

@@ -66,6 +66,10 @@ PRESETS: dict[str, Preset] = {
     # Social-media style: big, two words at a time, raised well above the bottom edge.
     "social": Preset("social", "רשתות חברתיות", 112, "FFFFFF", "000000", 0, 5, 1, "B0",
                      words_per_block=2, margin_v_frac=0.30, pop=True),
+    # Like social, bigger and heavier: a user found social thin and hard to read over a light shirt.
+    # The thick dark outline makes the letters read as bolder and keeps them clear on any background.
+    "social_bold": Preset("social_bold", "רשתות, עבה וגדול", 146, "FFFFFF", "000000", 7, 3, 1, "80",
+                          words_per_block=2, margin_v_frac=0.30, pop=True),
 }
 
 
@@ -246,7 +250,10 @@ def build_ass(
     height: int = 1920,
     safe_bottom_frac: float = 0.15,
     title_text: str | None = None,
+    seam: list[tuple[float, float]] | None = None,
 ) -> str:
+    """`seam`: times of a top/bottom split screen. Captions shown then sit on the line between the
+    two halves, where they cover no face, instead of at their usual height over the lower face."""
     if preset not in PRESETS:
         raise UserFacingError("unknown", detail=f"סגנון כתוביות לא מוכר: {preset}")
     if font not in FONTS:
@@ -278,7 +285,10 @@ def build_ass(
     for block in blocks:
         text = _rtl(" ".join(_escape(w.text) for w in block.words))
         pop = r"{\fad(70,40)\fscx92\fscy92\t(0,90,\fscx100\fscy100)}" if p.pop else ""
-        lines.append(f"Dialogue: 0,{_ts(block.start)},{_ts(block.end)},Default,,0,0,0,,{pop}{text}")
+        middle = (block.start + block.end) / 2
+        at_seam = any(a <= middle <= b for a, b in (seam or []))
+        place = rf"{{\an5\pos({width // 2},{height // 2})}}" if at_seam else ""
+        lines.append(f"Dialogue: 0,{_ts(block.start)},{_ts(block.end)},Default,,0,0,0,,{place}{pop}{text}")
     return "\n".join(lines) + "\n"
 
 

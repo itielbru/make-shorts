@@ -113,6 +113,9 @@ def apply_glossary(words: list[Word], mapping: dict[str, str]) -> list[Word]:
     Keeps edge punctuation and timing, and also matches the word with one Hebrew prefix letter
     (ב, ה, ל, מ, ו, כ, ש) in front, for keys of three letters or more.
     """
+    phrases = {tuple(k.split()): v for k, v in mapping.items() if len(k.split()) > 1}
+    if phrases:
+        words = _apply_phrases(words, phrases)
     fixed: list[Word] = []
     for w in words:
         text = w.text
@@ -129,3 +132,74 @@ def apply_glossary(words: list[Word], mapping: dict[str, str]) -> list[Word]:
             replacement = core[0] + mapping[core[1:]]
         fixed.append(Word(head + replacement + tail, w.start, w.end) if replacement is not None else w)
     return fixed
+
+
+def _apply_phrases(words: list[Word], phrases: dict[tuple[str, ...], str]) -> list[Word]:
+    """Several-word keys ("מילטה דה אבידה") matched on consecutive words, punctuation aside. The
+    replacement words take the matched slots in order; extra words join the last slot, and unused
+    slots are emptied (an empty word is not shown), so no index or timing moves."""
+    out = list(words)
+    cores = [w.text.strip(_EDGE_PUNCT) for w in words]
+    i = 0
+    while i < len(out):
+        hit = next((k for k in sorted(phrases, key=len, reverse=True) if tuple(cores[i:i + len(k)]) == k), None)
+        if hit is None:
+            i += 1
+            continue
+        k = len(hit)
+        first, last = out[i].text, out[i + k - 1].text
+        head = first[: first.index(cores[i])] if cores[i] else ""
+        tail = last[last.index(cores[i + k - 1]) + len(cores[i + k - 1]):] if cores[i + k - 1] else ""
+        new = phrases[hit].split()
+        slots = new[: k - 1] + [" ".join(new[k - 1:])] if len(new) >= k else new + [""] * (k - len(new))
+        slots[0] = head + slots[0]
+        filled = [j for j, s in enumerate(slots) if s]
+        if filled:
+            slots[filled[-1]] += tail
+        for j in range(k):
+            out[i + j] = Word(slots[j], out[i + j].start, out[i + j].end)
+        i += k
+    return out
+
+
+def glossary_warnings(mapping: dict[str, str]) -> list[str]:
+    """Entries that will not do what was meant. A value that starts with a prefix letter its key
+    lacks doubles the letter on a prefixed word (seen: "טרוטנו": "בתורתנו" made "בבתורתנו")."""
+    out = []
+    for key, value in mapping.items():
+        if len(key.split()) > 1:
+            continue
+        if value[:1] in _PREFIXES and key[:1] != value[:1] and len(value) > 3:
+            out.append(f"במילון, \"{key}\" ← \"{value}\": הערך מתחיל באות קידומת ({value[0]}) שאין במפתח. "
+                       "אם זו קידומת, כתוב את המפתח ואת הערך בלי הקידומת, כי הקוד מוסיף אותה לבד.")
+    return out
+
+
+_ALLOWED_SCRIPTS = {"he": ("HEBREW",), "ar": ("ARABIC",), "ru": ("CYRILLIC",), "uk": ("CYRILLIC",), "el": ("GREEK",)}
+
+
+def _odd_word(text: str, language: str) -> bool:
+    import unicodedata
+
+    if "<|" in text or "|>" in text:  # a Whisper control token leaked into the text
+        return True
+    allowed = ("LATIN",) + _ALLOWED_SCRIPTS.get(language, ())
+    for ch in text:
+        if ch.isalpha():
+            name = unicodedata.name(ch, "")
+            if not name.startswith(allowed):
+                return True
+    return False
+
+
+def odd_stretches(words: list[Word], language: str, join_gap: int = 3) -> list[tuple[int, int]]:
+    """Word ranges with letters from another script or Whisper control tokens: a stretch in another
+    language, or the engine inventing text. Close hits (up to `join_gap` words apart) are one range."""
+    hits = [i for i, w in enumerate(words) if _odd_word(w.text, language)]
+    ranges: list[tuple[int, int]] = []
+    for i in hits:
+        if ranges and i - ranges[-1][1] <= join_gap + 1:
+            ranges[-1] = (ranges[-1][0], i)
+        else:
+            ranges.append((i, i))
+    return ranges

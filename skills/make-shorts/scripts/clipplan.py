@@ -169,27 +169,37 @@ def crop_for_segments(
 SENTENCE_PAUSE_S = 0.5
 
 
-def finish_sentences(t: Transcript, parts: list[tuple[int, int]], max_extra_words: int = 30) -> list[tuple[int, int]]:
-    """Move each part's end forward to the end of the sentence (punctuation, or a real pause).
+def finish_sentences(
+    t: Transcript, parts: list[tuple[int, int]], max_extra_words: int = 30, inner_max_words: int = 8,
+) -> list[tuple[int, int]]:
+    """Move each part's end forward to the end of the sentence.
 
-    A cut in the middle of a sentence is worse than a clip that runs a few seconds longer.
+    A cut in the middle of a sentence is worse than a clip that runs a few seconds longer. The last
+    part runs on to punctuation or a real pause. A part followed by another part ends right before
+    material the clip leaves out on purpose, so it only moves to punctuation a few words away; with
+    no punctuation it stays put (seen: an unpunctuated transcript ran 20 s into a cut argument).
     Parts never grow into the next part or past the end of the transcript.
     """
     n = len(t.words)
     out: list[tuple[int, int]] = []
     for number, (a, b) in enumerate(parts):
-        limit = min(n - 1, b + max_extra_words)
-        if number + 1 < len(parts) and parts[number + 1][0] > b:
+        inner = number + 1 < len(parts)
+        limit = min(n - 1, b + (inner_max_words if inner else max_extra_words))
+        if inner and parts[number + 1][0] > b:
             limit = min(limit, parts[number + 1][0] - 1)
-        end = b
-        while end < limit:
+        end, found = b, False
+        while end <= limit:
             word = t.words[end]
-            if word.text.rstrip("\"'”’)»").endswith((".", "?", "!", "…")):
+            if word.text.rstrip("\"'”’)»").endswith(_SENTENCE_END):
+                found = True
                 break
-            if t.words[end + 1].start - word.end >= SENTENCE_PAUSE_S:
+            if end == limit:
+                break
+            if not inner and t.words[end + 1].start - word.end >= SENTENCE_PAUSE_S:
+                found = True
                 break
             end += 1
-        out.append((a, end))
+        out.append((a, end if found or not inner else b))
     return out
 
 
@@ -208,7 +218,10 @@ def check_parts(t: Transcript, parts: list[tuple[int, int]]) -> list[str]:
         if first in _OPENERS:
             warnings.append(f"{label} נפתח במילת קישור (\"{first}\"), אז הוא עלול להישמע כהמשך של משהו שלא רואים. כדאי להתחיל מוקדם יותר או לדלג על המילה.")
         if not t.words[b].text.rstrip("\"'”’)»").endswith(_SENTENCE_END):
-            warnings.append(f"{label} מסתיים באמצע משפט (\"{t.words[b].text}\"). כדאי להאריך עד סוף המשפט.")
+            if number < last:  # the next stretch was left out on purpose: growing into it is the wrong fix
+                warnings.append(f"{label} מסתיים באמצע משפט (\"{t.words[b].text}\"), ממש לפני קטע שהוצא. אם המשפט באמת נגמר שם, הוסף נקודה למילה הזו (correct --edits). אם לא, האריכו את החלק ב-parts.")
+            else:
+                warnings.append(f"{label} מסתיים באמצע משפט (\"{t.words[b].text}\"). כדאי להאריך עד סוף המשפט.")
         if t.words[b].end - t.words[a].start < MIN_PART_S:
             warnings.append(f"{label} קצר מאוד (פחות מ-{MIN_PART_S:g} שניות). חלק קצר נראה כמו הבזק ואחריו קפיצה, עדיף לוותר עליו או להאריך אותו.")
     return warnings

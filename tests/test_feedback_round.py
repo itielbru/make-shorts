@@ -370,7 +370,9 @@ def test_finish_sentences_extends_to_punctuation_or_pause_without_entering_next_
     words = [Word(w, i * 0.3, i * 0.3 + 0.25) for i, w in enumerate(["א", "ב", "ג", "ד.", "ה", "ו"])]
     t = Transcript(words=words, language="he", engine="x")
     assert clipplan.finish_sentences(t, [(0, 1)]) == [(0, 3)]
-    assert clipplan.finish_sentences(t, [(0, 1), (3, 4)]) == [(0, 2), (3, 5)]
+    # an inner part stops before the material left out: no punctuation before the next part, so it stays
+    assert clipplan.finish_sentences(t, [(0, 1), (3, 4)]) == [(0, 1), (3, 5)]
+    assert clipplan.finish_sentences(t, [(0, 1), (4, 5)]) == [(0, 3), (4, 5)]
     pause = [Word("א", 0, 0.2), Word("ב", 0.3, 0.5), Word("ג", 1.5, 1.7)]
     assert clipplan.finish_sentences(Transcript(words=pause, language="he", engine="x"), [(0, 0)]) == [(0, 1)]
 

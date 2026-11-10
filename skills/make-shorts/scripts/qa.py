@@ -173,6 +173,35 @@ def check_boundaries(clip: Clip, t: Transcript) -> list[Finding]:
     return findings
 
 
+EDGE_TOLERANCE_S = 0.08  # word timings are approximate; the waveform cut may sit a hair inside
+
+
+def edge_findings(words, segments) -> list[str]:
+    """Cuts of the rendered segments that fall well inside a spoken word, with what to do about it.
+
+    Checked against what was rendered, not the clip picked before render moved its edges (seen: qa
+    and render disagreeing about the same clip because qa looked at stale edges)."""
+    out = []
+    last = len(segments) - 1
+    for i, (a, b) in enumerate(segments):
+        for edge, which in ((a, "start"), (b, "end")):
+            k = next((k for k, w in enumerate(words) if w.start + EDGE_TOLERANCE_S < edge < w.end - EDGE_TOLERANCE_S), None)
+            if k is None:
+                continue
+            w = words[k]
+            # a word whose time overlaps its neighbour's has a wrong edge; the cut was put in the real
+            # pause before the neighbour (seen: a false "inside the word" on a sentence's last word)
+            if which == "end" and k + 1 < len(words) and words[k + 1].start < w.end and edge <= words[k + 1].start:
+                continue
+            if which == "start" and k > 0 and words[k - 1].end > w.start and edge >= words[k - 1].end:
+                continue
+            where = ("בתחילת הקליף" if i == 0 else f"בתחילת חלק {i + 1}") if which == "start" else \
+                    ("בסוף הקליף" if i == last else f"בסוף חלק {i + 1}")
+            out.append(f"החיתוך {where} נופל בתוך המילה \"{w.text}\". אם הדובר ממשיך או נקטע שם, אפשר להשאיר; "
+                       "אחרת הזיזו את גבול החלק מילה אחת ב-parts.")
+    return out
+
+
 def _has_audio(video: Path) -> bool:
     result = run_text(
         ["ffprobe", "-v", "error", "-select_streams", "a", "-show_entries", "stream=codec_type", "-of", "csv=p=0", str(video)],
@@ -181,7 +210,7 @@ def _has_audio(video: Path) -> bool:
     return "audio" in result.stdout
 
 
-def auto_checks(video: Path, expected_duration: float, clip: Clip, t: Transcript) -> list[Finding]:
+def auto_checks(video: Path, expected_duration: float, clip: Clip, t: Transcript, segments=None) -> list[Finding]:
     findings: list[Finding] = []
     actual = probe_duration(video)
     if abs(actual - expected_duration) > 0.3:
@@ -217,7 +246,10 @@ def auto_checks(video: Path, expected_duration: float, clip: Clip, t: Transcript
         if peak and float(peak.group(1)) >= -0.1:
             findings.append(Finding("clipping", "הקול בקליפ חזק מדי ועלול להישמע מעוות."))
 
-    findings.extend(check_boundaries(clip, t))
+    if segments:
+        findings.extend(Finding("mid_word_edge", text) for text in edge_findings(t.words, segments))
+    else:
+        findings.extend(check_boundaries(clip, t))
     return findings
 
 
@@ -236,7 +268,7 @@ def qa_report_markdown(frames: list[Frame], sheet: Path | None, findings: list[F
     lines += [f"- {f.message_he}" for f in findings] if findings else ["לא נמצאו בעיות אוטומטיות."]
     lines += [
         "",
-        "> צפה בכל פריים ברשימה לפני שתקבע שהכתוביות והמסגור תקינים. "
+        "> צפה בגיליון המקדים (ובפריים מלא כשמשהו בו חשוד) לפני שתקבע שהכתוביות והמסגור תקינים. "
         "אל תסיק על מה שנראה בווידאו רק מהתמלול.",
     ]
     return "\n".join(lines) + "\n"

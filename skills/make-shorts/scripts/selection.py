@@ -126,13 +126,16 @@ def _snap_start(starts: list[bool], s: int, limit: int) -> int:
 
 
 def _snap_end(ends: list[bool], e: int, limit: int) -> int:
+    """The chosen last word often closes the point without punctuation in the transcript (seen:
+    "...רק לא ביבי. זהו" snapped back six words and cut the punchline). So look forward first;
+    go back only when no sentence ends within reach ahead."""
     if ends[e]:
         return e
-    for d in range(1, limit + 1):
-        cands = [i for i in (e - d, e + d) if 0 <= i < len(ends) and ends[i]]
-        if cands:
-            return max(cands)  # ties prefer the later sentence
-    return e
+    ahead = next((i for i in range(e + 1, min(len(ends), e + limit + 1)) if ends[i]), None)
+    if ahead is not None:
+        return ahead
+    behind = next((i for i in range(e - 1, max(-1, e - limit - 1), -1) if ends[i]), None)
+    return behind if behind is not None else e
 
 
 def _edges(raw_start, raw_end, prev_end, next_start, silences, lead_s, tail_s, snap_s):

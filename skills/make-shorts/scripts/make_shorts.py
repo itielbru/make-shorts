@@ -315,6 +315,9 @@ def cmd_transcribe(args: argparse.Namespace) -> int:
         report.missing("תזמון המילים משוער (המנוע החזיר רק זמנים לקטעים), ולכן החיתוכים והכתוביות פחות מדויקים.")
     for start_s, end_s in t.gaps:
         report.missing(f"לא תומלל החלק שבין {mmss(start_s)} ל-{mmss(end_s)}. הרצה חוזרת של transcribe תנסה להשלים אותו.")
+    for a, b in transcript_mod.odd_stretches(t.words, profile.language):
+        report.missing(f"מילים {a}-{b} ({mmss(t.words[a].start)}-{mmss(t.words[b].end)}): אותיות משפה אחרת או סימני מנוע "
+                       "בתמלול. אולי מדברים שם בשפה אחרת, ואולי המנוע המציא טקסט. לא לבחור קטע משם בלי לבדוק.")
     if not t.words:
         report.missing("לא זוהה דיבור בסרטון (אולי יש בו רק מוזיקה או שקט), ולכן אין ממה לבחור קטעים. כדאי לנסות סרטון אחר.")
         print(report.markdown())
@@ -389,6 +392,21 @@ def cmd_refine(args: argparse.Namespace) -> int:
             f"{i}. {c.title}: {mmss(c.start)}-{mmss(c.end)} ({c.end - c.start:.0f} שניות), "
             f"ציון {c.score}. {c.reason} | \"{excerpt}...\""
         )
+    moved = []
+    for c in clips:  # a silently shortened end once cut the punchline; say so every time
+        p = next((p for p in picks if p.title == c.title), None)
+        if p is None:
+            continue
+        if c.end_word < p.end_word:
+            cut = " ".join(w.text for w in t.words[c.end_word + 1 : p.end_word + 1])
+            moved.append(f"- \"{c.title}\": הסוף קוצר מ-[{p.end_word}] ל-[{c.end_word}], והמילים \"{cut}\" יצאו. "
+                         "אם הן חלק מהנקודה, החזר אותן דרך parts ב-plan.json.")
+        elif c.end_word > p.end_word:
+            moved.append(f"- \"{c.title}\": הסוף הוארך מ-[{p.end_word}] ל-[{c.end_word}] (סוף המשפט).")
+        if c.start_word != p.start_word:
+            moved.append(f"- \"{c.title}\": ההתחלה הוזזה מ-[{p.start_word}] ל-[{c.start_word}] (תחילת המשפט).")
+    if moved:
+        report.section("גבולות שהזזתי (השווה לבחירה שלך)", moved)
     if len(clips) < floor:
         report.bullet(f"נבחרו {len(clips)} קטעים, פחות מהיעד ({floor}). אפשר לבקש עוד.")
     if warnings:
@@ -411,12 +429,18 @@ def cmd_correct(args: argparse.Namespace) -> int:
     """Show the caption text of the chosen clips and fix misheard words before they are burned in."""
     project = _project(args)
     state = ProjectState.load(project)
+    if getattr(args, "recaptioned", False):
+        if not state.rendered:
+            raise UserFacingError("no_rendered")
+        return _correct_recaptioned(args, project, state)
     if not state.clips and not args.glossary:
         raise UserFacingError("no_clips")
     t = _load_transcript(state)
     report = Report("טקסט הכתוביות")
     if args.glossary:
         mapping = read_glossary(Path(args.glossary))
+        for warning in transcript_mod.glossary_warnings(mapping):
+            report.bullet(warning)
         before = [w.text for w in t.words]
         t.words = transcript_mod.apply_glossary(t.words, mapping)
         changed = sum(1 for a, w in zip(before, t.words) if a != w.text)
@@ -428,9 +452,9 @@ def cmd_correct(args: argparse.Namespace) -> int:
         except (OSError, ValueError):
             raise UserFacingError("bad_edits_file") from None
         t.words = transcript_mod.apply_edits(t.words, edits)
-        fixes = edits
         transcript_mod.save_transcript(t, Path(state.transcript_path))
-        report.bullet(f"תוקנו {len(fixes)} מילים. התזמון נשמר.")
+        record_word_fixes(project, edits)  # recaption carries these over to the new words
+        report.bullet(f"תוקנו {len(edits)} מילים. התזמון נשמר, והתיקונים יעברו גם לתמלול מחדש (recaption).")
     wanted = {int(x) for x in args.clips.split(",")} if args.clips else None
     for entry in state.clips:
         if wanted and entry["id"] not in wanted:
@@ -440,6 +464,49 @@ def cmd_correct(args: argparse.Namespace) -> int:
             f"קליפ {entry['id']}: {clip.title}",
             [selection.render_indexed_transcript(t, clip.start_word, clip.end_word)],
         )
+    print(report.markdown())
+    return 0
+
+
+def _correct_recaptioned(args: argparse.Namespace, project: Path, state: ProjectState) -> int:
+    """Show and fix the re-transcribed words of clips (clip_words/NN.json) by index, the way
+    `correct` does for the transcript. Edits: [{"clip": N, "index": i, "text": "..."}]; "clip" may
+    be left out when --clips names a single clip."""
+    wanted = sorted({int(x) for x in args.clips.split(",")}) if args.clips else sorted(int(k) for k in state.rendered)
+    report = Report("טקסט הכתוביות (אחרי תמלול מחדש)")
+    if args.edits:
+        try:
+            edits = json.loads(Path(args.edits).read_text(encoding="utf-8"))
+            if not isinstance(edits, list):
+                raise ValueError
+        except (OSError, ValueError):
+            raise UserFacingError("bad_edits_file") from None
+        by_clip: dict[int, list[dict]] = {}
+        for e in edits:
+            clip_id = e.get("clip") if isinstance(e, dict) else None
+            if clip_id is None:
+                if len(wanted) != 1:
+                    raise UserFacingError("bad_edits_file")
+                clip_id = wanted[0]
+            by_clip.setdefault(int(clip_id), []).append(e)
+        for clip_id, items in sorted(by_clip.items()):
+            path = _clip_words_path(project, clip_id)
+            if not path.exists():
+                report.missing(f"קליפ {clip_id}: אין לו כתוביות מתמלול מחדש. הרץ קודם recaption.")
+                continue
+            raw = json.loads(path.read_text(encoding="utf-8"))
+            words = [transcript_mod.Word(str(r["text"]), float(r["start"]), float(r["end"])) for r in raw["words"]]
+            words = transcript_mod.apply_edits(words, items)
+            save_clip_words(project, clip_id, words, [tuple(s) for s in raw["segments"]])
+            report.bullet(f"קליפ {clip_id}: תוקנו {len(items)} מילים. כדי לראות אותן בקליף, הרץ render --recaptioned.")
+    for clip_id in wanted:
+        path = _clip_words_path(project, clip_id)
+        if not path.exists():
+            continue
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        items = raw["words"] if isinstance(raw, dict) else raw
+        text = " ".join(f"[{i}]{r['text']}" for i, r in enumerate(items) if r["text"])
+        report.section(f"קליפ {clip_id}", [text])
     print(report.markdown())
     return 0
 
@@ -474,7 +541,13 @@ def cmd_render(args: argparse.Namespace) -> int:
             cplan = plans.get(clip_id, clipplan.ClipPlan())
             base_segments = None
             if not args.keep_cuts:
-                cplan.parts = clipplan.finish_sentences(t, cplan.parts or [(clip.start_word, clip.end_word)])
+                chosen = cplan.parts or [(clip.start_word, clip.end_word)]
+                cplan.parts = clipplan.finish_sentences(t, chosen)
+                for number, ((_, b0), (_, b1)) in enumerate(zip(chosen, cplan.parts), start=1):
+                    if b1 > b0:
+                        label = f"חלק {number}" if len(chosen) > 1 else "הסוף"
+                        report.bullet(f"קליפ {clip_id}: {label} הוארך עד סוף המשפט, עד המילה [{b1}] \"{t.words[b1].text}\". "
+                                      "אם זה נכנס לקטע שלא רצית, הרץ עם --keep-cuts.")
             if cplan.parts:
                 base_segments = clipplan.segments_from_parts(
                     t, cplan.parts, quietest=audio_mod.waveform_quietest(Path(state.media_path)) if state.has_audio else None
@@ -497,6 +570,9 @@ def cmd_render(args: argparse.Namespace) -> int:
             split = None
             video_segments = None
             crop = clipplan.crop_for_segments(plan.segments, base_segments or [(clip.start, clip.end)], cplan.crop_x)
+            if cplan.crop_x and args.reframe == "center":
+                report.bullet(f"קליפ {clip_id}: בתוכנית יש crop_x, ולכן המסגור האוטומטי כבוי (מעקב פנים, מסך מפוצל, "
+                              "החלפה בחילוף מצלמה). אם זה לא בכוונה, מחק את crop_x מ-plan.json.")
             if not cplan.crop_x and args.reframe == "center" and not args.no_auto_crop:
                 if facecrop.available():
                     progress(f"קליפ {clip_id}: מזהה פנים ומחליט איפה לחתוך...")
@@ -555,17 +631,31 @@ def cmd_render(args: argparse.Namespace) -> int:
             report.missing(f"קליפ {clip_id} ({clip.title}): משהו לא צפוי השתבש ({type(err).__name__}).")
             continue
         produced += 1
+        checks = []  # one fixed line per clip: silence must never be the only sign a check passed
         try:
-            for finding in _render_check(final, state.has_audio):
+            found = _render_check(final, state.has_audio)
+            for finding in found:
                 report.missing(f"קליפ {clip_id}: {finding}")
+            checks.append("בדיקת רינדור: עברה" if not found else f"בדיקת רינדור: {len(found)} תקלות (ראה ראיות חסרות)")
         except Exception as err:  # the check must never lose a rendered clip, nor pass for clean
             report.missing(f"קליפ {clip_id}: בדיקת הרינדור לא רצה ({type(err).__name__}), אז אין לדעת אם הקליף תקין.")
+            checks.append("בדיקת רינדור: לא רצה")
         if args.reframe == "center":
             try:
-                for finding in _motion_check(final, video_segments or plan.segments, crop, zoom):
+                moves = _motion_check(final, video_segments or plan.segments, crop, zoom)
+                for finding in moves:
                     report.bullet(f"קליפ {clip_id}, בדיקת קפיצות: {finding}")
+                checks.append(f"בדיקת קפיצות: {len(moves)} ממצאים")
             except Exception as err:  # the check must never lose a rendered clip
                 report.bullet(f"קליפ {clip_id}: בדיקת הקפיצות לא רצה ({type(err).__name__}).")
+                checks.append("בדיקת קפיצות: לא רצה")
+        joins = len(plan.segments) - 1
+        if joins:
+            punched = sum(1 for i in range(joins) if zoom and zoom[i] != zoom[i + 1])
+            checks.append(f"חיבורים: {joins}" + (f" ({punched} עם זום קל)" if punched else ""))
+        for finding in qa.edge_findings(t.words, plan.segments):
+            report.bullet(f"קליפ {clip_id}: {finding}")
+        report.bullet(f"קליפ {clip_id}: " + ". ".join(checks) + ".")
         state.rendered[str(clip_id)] = {
             "path": str(final), "segments": [list(s) for s in plan.segments],
             "title_text": plan.title_text, "expected_duration": sum(b - a for a, b in plan.segments),
@@ -723,8 +813,11 @@ def cmd_recaption(args: argparse.Namespace) -> int:
     wanted = {int(x) for x in args.clips.split(",")} if args.clips else None
     ws = _workspace(state)
     t = _load_transcript(state)
+    fixes = load_word_fixes(project)
     engine = engines.get_engine("groq")
     report = Report("כתוביות מחדש")
+    for warning in transcript_mod.glossary_warnings(mapping):
+        report.bullet(warning)
     for clip_id_s, info in sorted(state.rendered.items(), key=lambda kv: int(kv[0])):
         clip_id = int(clip_id_s)
         if wanted and clip_id not in wanted:
@@ -743,6 +836,11 @@ def cmd_recaption(args: argparse.Namespace) -> int:
         words = merged
         if mapping:
             words = transcript_mod.apply_glossary(words, mapping)
+        if fixes:
+            words, carried, lost = carry_word_fixes(words, t.words, fixes, [tuple(s) for s in info["segments"]])
+            if carried or lost:
+                report.bullet(f"קליפ {clip_id}: {carried} תיקוני מילים מ-correct הועברו לתמלול החדש"
+                              + (f". לא מצאתי איפה לשים: {', '.join(lost)}. תקן אותם ב-correct --recaptioned." if lost else "."))
         target = save_clip_words(project, clip_id, words, [tuple(s) for s in info["segments"]])
         report.bullet(f"קליפ {clip_id}: {len(words)} מילים, נשמר ב-`{target}`")
     print(report.markdown())
@@ -757,6 +855,62 @@ def read_glossary(path: Path) -> dict[str, str]:
     except (OSError, ValueError):
         raise UserFacingError("bad_edits_file") from None
     return mapping
+
+
+WORD_FIXES_FILE = "word_fixes.json"
+
+
+def _word_fixes_path(project: Path) -> Path:
+    return project / WORD_FIXES_FILE
+
+
+def load_word_fixes(project: Path) -> dict[int, str]:
+    """Every `correct --edits` fix, by transcript index. Kept so a later recaption can carry them
+    over: re-transcribing a clip used to bring nearly every fixed word back wrong."""
+    path = _word_fixes_path(project)
+    if not path.exists():
+        return {}
+    try:
+        return {int(k): str(v) for k, v in json.loads(path.read_text(encoding="utf-8")).items()}
+    except (OSError, ValueError, AttributeError):
+        return {}
+
+
+def record_word_fixes(project: Path, edits: list[dict]) -> None:
+    fixes = load_word_fixes(project)
+    for e in edits:
+        fixes[int(e["index"])] = str(e["text"]).strip()
+    _word_fixes_path(project).write_text(json.dumps({str(k): v for k, v in sorted(fixes.items())}, ensure_ascii=False, indent=1),
+                                         encoding="utf-8")
+
+
+def carry_word_fixes(new_words, source_words, fixes: dict[int, str], segments):
+    """Put each recorded fix on the re-transcribed word heard at the same moment. The fixed word is
+    moved to the clip's timeline and matched to the new word that overlaps it most (at least half of
+    the shorter of the two). Returns (words, carried, not placed)."""
+    words = list(new_words)
+    carried, lost = 0, []
+    for index, text in sorted(fixes.items()):
+        if not 0 <= index < len(source_words):
+            continue
+        src = source_words[index]
+        mapped = captions.remap_words([transcript_mod.Word(src.text or "x", src.start, src.end)], segments)
+        if not mapped:
+            continue  # this fix is outside the clip
+        m = mapped[0]
+        best, best_overlap = None, 0.0
+        for j, w in enumerate(words):
+            overlap = min(w.end, m.end) - max(w.start, m.start)
+            if overlap > best_overlap:
+                best, best_overlap = j, overlap
+        shorter = min(m.end - m.start, (words[best].end - words[best].start) if best is not None else 0.0)
+        if best is None or best_overlap < 0.5 * max(shorter, 1e-6):
+            lost.append(text)
+            continue
+        if words[best].text != text:
+            words[best] = transcript_mod.Word(text, words[best].start, words[best].end)
+        carried += 1
+    return words, carried, lost
 
 
 def save_clip_words(project: Path, clip_id: int, words, segments) -> Path:
@@ -815,7 +969,7 @@ def cmd_qa(args: argparse.Namespace) -> int:
             qa_dir = project / "qa" / f"clip_{entry['id']:02d}"
             frames = qa.extract_frames(video, times, qa_dir)
             sheet = qa.contact_sheet(frames, qa_dir / "sheet.png")
-            findings = qa.auto_checks(video, duration, clip, t)
+            findings = qa.auto_checks(video, duration, clip, t, segments=segments)
             report.raw(f"## קליפ {entry['id']}: {clip.title}\n" + qa.qa_report_markdown(frames, sheet, findings))
         except UserFacingError as err:
             report.missing(f"קליפ {entry['id']}: {err.message_he}")
@@ -967,6 +1121,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--clips")
     p.add_argument("--glossary", help='קובץ JSON עם מילון {"שגוי": "נכון"} שמוחל על כל התמלול, גם לפני בחירת קטעים')
     p.add_argument("--edits", help='קובץ JSON עם תיקוני מילים: [{"index": 12, "text": "מילה"}]')
+    p.add_argument("--recaptioned", action="store_true",
+                   help='להציג ולתקן את כתוביות הקליפים אחרי recaption (clip_words). תיקונים: [{"clip": 3, "index": 12, "text": "מילה"}]')
 
     p = add("render", cmd_render)
     p.add_argument("--clips", help="מספרי קליפים מופרדים בפסיק (ברירת מחדל: כולם)")

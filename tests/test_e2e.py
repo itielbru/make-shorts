@@ -89,7 +89,7 @@ def test_pipeline_ingest_to_cleanup_on_a_hebrew_project_path(config_home, monkey
     assert durations[1] > durations[0] - 1.0  # the teaser adds its quote before the clip
 
     code, out, _ = run("qa", "--project", project)
-    assert code == 0 and "צפה בכל" in out
+    assert code == 0 and "צפה בגיליון" in out
     frame_paths = re.findall(r"`([^`]+\.png)`", out)
     assert len(frame_paths) >= 6 and all(Path(p).exists() for p in frame_paths)
 

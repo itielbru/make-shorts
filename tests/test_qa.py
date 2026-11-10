@@ -139,7 +139,7 @@ def test_report_lists_every_frame_path_and_view_all_instruction():
     assert "f0.png" in report and "f1.png" in report
     assert "t=00:01" in report and "t=01:05" in report
     assert "sheet.png" in report
-    assert "צפה בכל" in report
+    assert "צפה בגיליון" in report
 
 
 def test_preview_frames_returns_ascending_frames_within_the_cap(synthetic_video, tmp_path):

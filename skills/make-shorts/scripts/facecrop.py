@@ -7,8 +7,12 @@ OpenCV and numpy are optional: without them the caller falls back to a fixed cro
 """
 from __future__ import annotations
 
+import os
 import shutil
 from dataclasses import dataclass
+
+# OpenCV's face model prints harmless "[ WARN ] setPreferableTarget" lines into the report
+os.environ.setdefault("OPENCV_LOG_LEVEL", "ERROR")
 from pathlib import Path
 
 from captions import SKILL_ROOT

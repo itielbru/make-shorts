@@ -298,7 +298,7 @@ def test_qa_lists_frames_for_rendered_clips(refined, capsys):
     run(capsys, "render", "--project", refined, "--clips", "1", "--reframe", "center")
     code, out, _ = run(capsys, "qa", "--project", refined)
     assert code == 0
-    assert "צפה בכל" in out
+    assert "צפה בגיליון" in out
     frame_paths = re.findall(r"`([^`]+\.png)`", out)
     assert len(frame_paths) >= 3 and all(Path(p).exists() for p in frame_paths)
 

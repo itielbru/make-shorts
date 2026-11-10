@@ -738,7 +738,7 @@ def _motion_check(final: Path, segments, crop, zoom) -> list[str]:
     for i, (a, b) in enumerate(segments):
         seg_crop = crop[i] if isinstance(crop, list) and i < len(crop) else crop
         if isinstance(seg_crop, list):
-            steps += [(offset + t, x) for t, x in seg_crop]
+            steps += [(offset + s[0], s[1]) for s in seg_crop]
         elif seg_crop is not None:
             steps.append((offset, float(seg_crop)))
         offset += b - a

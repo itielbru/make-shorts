@@ -4,9 +4,11 @@ Rules from the spec: keep text exactly as transcribed (no uppercase, Hebrew
 punctuation kept), leave the bottom 15% of the frame free, and use a bundled
 OFL Hebrew font chosen by mood.
 
-No inline word highlight: libass lays out RTL words in the wrong order around
-mid-line colour tags (seen in the visual check), so each block is one plain
-event. Per-word highlight is deferred to the optional HyperFrames extension.
+No colour tags inside a line: around mid-line tags libass moves Hebrew
+punctuation to the wrong side of a word (seen in the visual check), so the
+text of every event is plain. The spoken-word highlight (presets with
+`highlight`) draws the same plain line again in the highlight colour, clipped
+to the box of the word being spoken; the boxes are measured by libass itself.
 """
 from __future__ import annotations
 
@@ -55,6 +57,7 @@ class Preset:
     words_per_block: int = 3
     margin_v_frac: float | None = None  # distance of the text from the bottom, as a fraction of the height
     pop: bool = False  # soft fade and scale-in at the start of each caption
+    highlight: str | None = None  # BGR colour of the word being spoken, or None for plain blocks
 
 
 PRESETS: dict[str, Preset] = {
@@ -68,8 +71,12 @@ PRESETS: dict[str, Preset] = {
                      words_per_block=2, margin_v_frac=0.30, pop=True),
     # Like social, bigger and heavier: a user found social thin and hard to read over a light shirt.
     # The thick dark outline makes the letters read as bolder and keeps them clear on any background.
-    "social_bold": Preset("social_bold", "רשתות, עבה וגדול", 146, "FFFFFF", "000000", 7, 3, 1, "80",
-                          words_per_block=2, margin_v_frac=0.30, pop=True),
+    # Round 2 of the user's design feedback: the word being spoken turns yellow (the look viewers
+    # expect), a thicker outline, and the text lower, on the chest instead of over the mouth and chin
+    # (seen on the QA sheets: at 0.30 the captions sat on the lower face of every close-up). 0.22
+    # still clears the bottom bar that Reels and TikTok draw over the video.
+    "social_bold": Preset("social_bold", "רשתות, עבה וגדול", 146, "FFFFFF", "000000", 8, 4, 1, "70",
+                          words_per_block=2, margin_v_frac=0.22, pop=True, highlight="00E5FF"),
 }
 
 
@@ -255,9 +262,15 @@ def build_ass(
     safe_bottom_frac: float = 0.15,
     title_text: str | None = None,
     seam: list[tuple[float, float]] | None = None,
+    word_edges: list[list[float] | None] | None = None,
 ) -> str:
     """`seam`: times of a top/bottom split screen. Captions shown then sit on the line between the
-    two halves, where they cover no face, instead of at their usual height over the lower face."""
+    two halves, where they cover no face, instead of at their usual height over the lower face.
+
+    `word_edges` (from `measure_word_edges`, one entry per block) turns on the spoken-word
+    highlight: the block is drawn as always, and the same text in the highlight colour is drawn
+    over it, clipped to the box of the word being spoken. Colour tags inside an RTL line move
+    Hebrew punctuation in libass, so the text of every event stays plain."""
     if preset not in PRESETS:
         raise UserFacingError("unknown", detail=f"סגנון כתוביות לא מוכר: {preset}")
     if font not in FONTS:
@@ -286,14 +299,91 @@ def build_ass(
     ]
     if title_text:
         lines.append(f"Dialogue: 1,{_ts(0.0)},{_ts(3.0)},Title,,0,0,0,,{_rtl(_escape(title_text))}")
-    for block in blocks:
+    for i, block in enumerate(blocks):
         text = _rtl(" ".join(_escape(w.text) for w in block.words))
         pop = r"{\fad(70,40)\fscx92\fscy92\t(0,90,\fscx100\fscy100)}" if p.pop else ""
         middle = (block.start + block.end) / 2
         at_seam = any(a <= middle <= b for a, b in (seam or []))
         place = rf"{{\an5\pos({width // 2},{height // 2})}}" if at_seam else ""
         lines.append(f"Dialogue: 0,{_ts(block.start)},{_ts(block.end)},Default,,0,0,0,,{place}{pop}{text}")
+        edges = word_edges[i] if word_edges and i < len(word_edges) else None
+        if not p.highlight or not edges or len(block.words) < 2:
+            continue
+        for k, (x1, x2) in enumerate(word_boxes(edges, width)):
+            w = block.words[k]
+            start = block.start if k == 0 else max(block.start, w.start)
+            end = block.end if k == len(block.words) - 1 else min(block.end, block.words[k + 1].start)
+            if end - start < 0.05:
+                continue
+            clip = rf"{{\clip({x1:.0f},0,{x2:.0f},{height})\1c&H{p.highlight}&}}"
+            lines.append(f"Dialogue: 1,{_ts(start)},{_ts(end)},Default,,0,0,0,,{place}{pop if k == 0 else ''}{clip}{text}")
     return "\n".join(lines) + "\n"
+
+
+def word_boxes(edges: list[float], width: int = 1080) -> list[tuple[float, float]]:
+    """Horizontal box of each word (logical order) from the measured edges: `edges[k]` is the x of
+    the gap before word k, counted from the right (RTL); the outer words reach the frame's edges,
+    so a small measuring error never cuts a letter at the ends of the line."""
+    n = len(edges) + 1
+    bounds = [float(width)] + list(edges) + [0.0]
+    return [(bounds[k + 1], bounds[k]) for k in range(n)]
+
+
+def measure_word_edges(blocks: list[Block], preset: str, font: str, ws_dir: Path, width: int = 1080) -> list[list[float] | None]:
+    """Where the gaps between the words of each block fall on screen, measured by libass itself (the
+    renderer that burns the captions), so Hebrew shaping and RTL order are exactly as burned.
+
+    Each block and each of its leading word runs is drawn on its own row of one wide, plain image;
+    the ink width of the first k words gives the gap after word k, from the right end of the centred
+    line. A block too wide for one line (libass would wrap it) gets None: no highlight there."""
+    import subprocess
+
+    import numpy as np
+
+    p = PRESETS[preset]
+    family = FONTS[font].family
+    canvas_w, row_h = 3000, int(p.size * 1.6)
+    rows: list[str] = []
+    plan: list[tuple[int, int]] = []  # (first row, number of words) per block
+    for block in blocks:
+        n = len(block.words)
+        plan.append((len(rows), n))
+        rows.append(" ".join(_escape(w.text) for w in block.words))
+        rows += [" ".join(_escape(w.text) for w in block.words[:k]) for k in range(1, n)]
+    if not rows:
+        return []
+    height = row_h * len(rows)
+    style = (f"Style: M,{family},{p.size},&H00FFFFFF,&H00FFFFFF,&H00000000,&H00000000,"
+             f"-1,0,0,0,100,100,0,0,1,0,0,7,0,0,0,1")
+    events = [f"Dialogue: 0,0:00:00.00,0:00:01.00,M,,0,0,0,,{{\\pos(20,{r * row_h + 10})}}{_rtl(text)}"
+              for r, text in enumerate(rows)]
+    ass = "\n".join(["[Script Info]", "ScriptType: v4.00+", f"PlayResX: {canvas_w}", f"PlayResY: {height}",
+                     "WrapStyle: 2", "", "[V4+ Styles]",
+                     "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, "
+                     "Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, "
+                     "Alignment, MarginL, MarginR, MarginV, Encoding", style, "", "[Events]",
+                     "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text", *events]) + "\n"
+    (ws_dir / "measure.ass").write_text(ass, encoding="utf-8")
+    raw = subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i",
+                          f"color=c=black:s={canvas_w}x{height}:d=0.1", "-vf", "ass=measure.ass:fontsdir=fonts,format=gray",
+                          "-frames:v", "1", "-f", "rawvideo", "-"], capture_output=True, timeout=120, cwd=ws_dir).stdout
+    if len(raw) < canvas_w * height:
+        return [None] * len(blocks)
+    image = np.frombuffer(raw[: canvas_w * height], np.uint8).reshape(height, canvas_w)
+    widths = []
+    for r in range(len(rows)):
+        cols = np.where(image[r * row_h:(r + 1) * row_h].max(axis=0) > 60)[0]
+        widths.append(float(cols[-1] - cols[0] + 1) if len(cols) else 0.0)
+    space = p.size * 0.25
+    out: list[list[float] | None] = []
+    for first, n in plan:
+        line = widths[first]
+        if line <= 0 or line > width - 120 - 2 * p.outline:  # 60 px margins: libass would wrap it
+            out.append(None)
+            continue
+        right = width / 2 + line / 2
+        out.append([right - widths[first + k] - space / 2 for k in range(1, n)])
+    return out
 
 
 def _srt_ts(seconds: float) -> str:

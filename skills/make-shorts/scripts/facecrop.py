@@ -7,6 +7,7 @@ OpenCV and numpy are optional: without them the caller falls back to a fixed cro
 """
 from __future__ import annotations
 
+import math
 import os
 import shutil
 from dataclasses import dataclass
@@ -48,9 +49,11 @@ def available() -> bool:
 # Lead room: a face turned to one side sits off-centre, with the empty space on the side it looks
 # and talks toward, the way a camera operator frames it. Measured on a real podcast: a close-up
 # turned toward the other speaker is +0.35..+0.46 eye-widths, a face into the camera +0.08.
-LEAD_ROOM = 0.14   # how far off centre (share of the frame width) a fully turned face moves
+# 0.14 pushed faces toward the edge; the user asked for people in the middle, so only a hint remains.
+LEAD_ROOM = 0.05   # how far off centre (share of the frame width) a fully turned face moves
 YAW_FULL = 0.4     # a turn this big gets the full lead room
 YAW_DEAD = 0.15    # below this the face counts as looking into the camera
+EDGE_PAD = 0.06    # the whole face stays at least this far (share of the window width) from its edges
 
 
 def lead_for(yaw: float) -> float:
@@ -60,12 +63,91 @@ def lead_for(yaw: float) -> float:
     return LEAD_ROOM * max(-1.0, min(1.0, yaw / YAW_FULL))
 
 
-def crop_fraction(face_cx: float, aspect: float, lead: float = 0.0) -> float:
+def crop_fraction(face_cx: float, aspect: float, lead: float = 0.0, face_width: float = 0.0) -> float:
     """Where (0 = far left, 1 = far right) the vertical window must sit so that a face at `face_cx`
-    lands at `0.5 - lead` of the window's width (centred when lead is 0)."""
+    lands at `0.5 - lead` of the window's width (centred when lead is 0). With `face_width` (share
+    of the source width) the lead shrinks so the whole face keeps EDGE_PAD from the window's edge."""
     scaled_w = OUT_H * aspect
+    if face_width > 0 and lead:
+        half = face_width * scaled_w / OUT_W / 2
+        lead = math.copysign(min(abs(lead), max(0.0, 0.5 - half - EDGE_PAD)), lead)
     x = face_cx * scaled_w - (0.5 - lead) * OUT_W
     return round(min(1.0, max(0.0, x / (scaled_w - OUT_W))), 3)
+
+
+# Following a person inside a shot. Seen: a 34 s shot where the speaker leaned across a fifth of the
+# frame while the crop stayed at his average, so he kept ending up at the edge. Like a camera
+# operator, the crop holds still while the face is near the middle and glides back when it drifts.
+TRACK_DEADBAND = 0.10  # share of the window width the face may drift from its place before the crop moves
+GLIDE_S = 0.6          # how long one re-centring glide takes
+SMOOTH_S = 1.0         # face positions are smoothed over this long (a nod or a gesture is not a move)
+TRACK_MIN_SHOT_S = 4.0  # shorter shots keep one position: glides back and forth there looked restless
+TRACK_REST_S = 1.0      # after a glide the crop rests at least this long before the next one
+
+
+def track_glides(samples: list[tuple[float, float]], start_crop: float, aspect: float, lead: float = 0.0,
+                 face_width: float = 0.0) -> list[tuple[float, float, float]]:
+    """Glides (time, crop, glide seconds) that keep a moving face near its place in the window.
+    `samples` are (time from the shot start, face centre 0..1 of the source width)."""
+    if len(samples) < 3:
+        return []
+    scaled_w = OUT_H * aspect
+    travel = scaled_w - OUT_W  # pixels the window can move between crop 0 and 1
+    if travel <= 0:
+        return []
+    half = SMOOTH_S / 2
+    smoothed = []
+    for t, _ in samples:
+        near = sorted(cx for s, cx in samples if abs(s - t) <= half)
+        smoothed.append((t, near[len(near) // 2]))
+    glides: list[tuple[float, float, float]] = []
+    crop, busy_until = start_crop, SMOOTH_S  # the opening second set the start position already
+    last_t = samples[-1][0]
+    for t, cx in smoothed:
+        if t < busy_until or t + GLIDE_S > last_t:
+            continue
+        want = crop_fraction(cx, aspect, lead, face_width)
+        if abs(want - crop) * travel > TRACK_DEADBAND * OUT_W:
+            glides.append((round(t, 3), want, GLIDE_S))
+            crop, busy_until = want, t + GLIDE_S + TRACK_REST_S
+    return glides
+
+
+def overlay_faces(shot_clusters: list[list[FaceCluster]]) -> list[tuple[float, float]]:
+    """(cx, width) of faces that are part of the broadcast graphics: a small face in a corner box
+    (a sign-language interpreter, a picture-in-picture) at the very same spot in two or more shots.
+    Seen: the crop followed such an inset and showed the empty studio beside it."""
+    corner = [(k, c) for k, cl in enumerate(shot_clusters) for c in cl
+              if (c.cx < 0.2 or c.cx > 0.8) and c.width < 0.08]
+    out: list[tuple[float, float]] = []
+    for k, c in corner:
+        same = {j for j, d in corner if abs(d.cx - c.cx) < 0.02 and abs(d.width - c.width) < 0.015}
+        cy = c.cy / c.frames if c.frames else 0.5
+        # a box high or low in a corner (a promo, an interpreter) is graphics even in a single shot;
+        # people in a wide shot sit at mid height
+        if (len(same) >= 2 or cy < 0.2 or cy > 0.65) and not any(abs(x - c.cx) < 0.02 for x, _ in out):
+            out.append((c.cx, c.width))
+    return out
+
+
+def without_overlays(clusters: list[FaceCluster], overlays: list[tuple[float, float]]) -> list[FaceCluster]:
+    return [c for c in clusters if not any(abs(c.cx - x) < 0.03 and abs(c.width - w) < 0.02 for x, w in overlays)]
+
+
+def follow_face(frames: list[list[tuple]], subject: "FaceCluster", sample_fps: float = 10.0) -> list[tuple[float, float]]:
+    """(time, cx) of the subject in each sampled frame of a shot, following the nearest face of a
+    similar size from frame to frame (so a small inset face or a neighbour is not picked up)."""
+    out: list[tuple[float, float]] = []
+    current = subject.cx
+    width = subject.width
+    for i, faces in enumerate(frames):
+        fits = [f for f in faces if 0.6 * width <= f[1] <= 1.6 * width and abs(f[0] - current) <= 0.12]
+        if not fits:
+            continue
+        face = min(fits, key=lambda f: abs(f[0] - current))
+        current = face[0]
+        out.append((i / sample_fps, face[0]))
+    return out
 
 
 # Wide shots of two people: a vertical crop holds only one of them, and at this size the picture
@@ -93,6 +175,11 @@ def choose_subject(clusters: list[FaceCluster], total_frames: int) -> FaceCluste
     seen = [c for c in clusters if c.frames >= max(1, 0.3 * total_frames)]
     if not seen:
         return None
+    # a face cut by the edge of the source picture can only be shown half; prefer a whole one
+    # (seen: a host in profile at the frame's edge was chosen, and the clip showed half a face)
+    whole = [c for c in seen if c.cx - c.width / 2 > 0.01 and c.cx + c.width / 2 < 0.99]
+    if whole:
+        seen = whole
     if len(seen) == 1:
         return seen[0]
     by_motion = sorted(seen, key=lambda c: c.motion / c.frames, reverse=True)
@@ -463,8 +550,12 @@ def analyze_segment(
     duration = end - start
     ends = boundaries[1:] + [duration]
     raw: list[tuple[float, float, float | None]] = []
+    glides: list[tuple[float, float, float]] = []
     splits: list[tuple[float, float, tuple[float, float], tuple[float, float]]] = []
+    overlays = overlay_faces([_clusters_for_shot(f) for f in shots])
     for s_start, s_end, frame_faces in zip(boundaries, ends, shots):
+        frame_faces = [[f for f in faces if not any(abs(f[0] - x) < 0.03 and abs(f[1] - w) < 0.02 for x, w in overlays)]
+                       for faces in frame_faces]
         clusters = _clusters_for_shot(frame_faces)
         pair = wide_pair(clusters, total_frames=len(frame_faces))
         if pair and s_end - s_start >= SPLIT_MIN_S:
@@ -475,9 +566,72 @@ def analyze_segment(
             raw.append((s_start, s_end, None))  # hidden under the split; keeps the neighbour's crop
             continue
         subject = choose_subject(clusters, total_frames=len(frame_faces))
+        if (subject is None or subject.width < WIDE_FACE_MAX) and s_end - s_start >= SPLIT_MIN_S:
+            # a wide shot whose faces are too small for the quick pass (seen: the crop landed on the
+            # studio stairs, beside the people): look again at a few sharper frames
+            sharp = [_detect_sharp(src, start + s_start + (s_end - s_start) * k / 4) for k in (1, 2, 3)]
+            group = group_centre(without_overlays(_clusters_for_shot([f for f in sharp if f is not None]), overlays),
+                                 total_frames=3)
+            if group is None and subject is not None:
+                group = subject.cx
+            raw.append((s_start, s_end, crop_fraction(group, aspect) if group is not None else None))
+            continue
         lead = lead_for(subject.yaw / subject.frames) if subject else 0.0
-        raw.append((s_start, s_end, crop_fraction(subject.cx, aspect, lead) if subject else None))
-    return start, end, steps_from_shots(fill_faceless(raw)), stills, splits
+        width = subject.width if subject else 0.0
+        if subject is None:
+            raw.append((s_start, s_end, None))
+            continue
+        samples = follow_face(frame_faces, subject, SAMPLE_FPS) if s_end - s_start >= TRACK_MIN_SHOT_S else []
+        opening = [cx for t, cx in samples if t <= SMOOTH_S]
+        first_cx = sorted(opening)[len(opening) // 2] if opening else subject.cx
+        crop0 = crop_fraction(first_cx, aspect, lead, width)
+        raw.append((s_start, s_end, crop0))
+        glides += [(round(s_start + t, 3), x, g) for t, x, g in track_glides(samples, crop0, aspect, lead, width)
+                   if s_start + t + g <= s_end]
+    steps = steps_from_shots(fill_faceless(raw))
+    if glides:
+        steps = sorted(steps + glides, key=lambda s: s[0])
+    return start, end, steps, stills, splits
+
+
+def group_centre(clusters: list[FaceCluster], total_frames: int) -> float | None:
+    """Where to look in a wide shot with no single subject: the middle of the people seen, if they
+    fit in the vertical window together; otherwise the person nearest the middle of the picture,
+    where the camera operator put the main subject (seen: a host standing between two panels)."""
+    seen = [c for c in clusters if c.frames >= max(1, 0.3 * total_frames)]
+    if not seen:
+        return None
+    lo, hi = min(c.cx for c in seen), max(c.cx for c in seen)
+    window = OUT_W / (OUT_H * 16 / 9)  # share of a 16:9 source width the vertical window shows
+    if hi - lo <= window * 0.8:
+        return (lo + hi) / 2
+    return min(seen, key=lambda c: abs(c.cx - 0.5)).cx
+
+
+def _detect_sharp(src: Path, t: float, width: int = 1440):
+    """Faces in one frame at a higher resolution than the quick pass, as (cx, width, 0, yaw, cy)."""
+    import subprocess
+
+    import cv2
+    import numpy as np
+
+    raw = subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-ss", f"{t:.3f}", "-i", str(src),
+                          "-frames:v", "1", "-vf", f"scale={width}:-2", "-f", "image2pipe", "-vcodec", "png", "-"],
+                         capture_output=True, timeout=60).stdout
+    if not raw:
+        return None
+    image = cv2.imdecode(np.frombuffer(raw, np.uint8), cv2.IMREAD_COLOR)
+    if image is None:
+        return None
+    h, w = image.shape[:2]
+    detector = _detector()
+    detector.setInputSize((w, h))
+    _, faces = detector.detect(image)
+    out = []
+    for f in (faces if faces is not None else []):
+        x, y, fw, fh = (float(v) for v in f[:4])
+        out.append(((x + fw / 2) / w, fw / w, 0.0, 0.0, (y + fh / 2) / h))
+    return out
 
 
 EXTEND_REACH_S = 1.5   # how far a clip edge may move outwards, into silence, to meet a camera cut

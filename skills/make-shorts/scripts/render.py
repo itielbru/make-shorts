@@ -11,7 +11,7 @@ import shutil
 from pathlib import Path
 from typing import Literal
 
-from captions import FONTS, PRESETS, SKILL_ROOT, build_ass, build_srt, make_blocks, remap_words
+from captions import FONTS, PRESETS, SKILL_ROOT, build_ass, build_srt, make_blocks, measure_word_edges, remap_words
 from hooks import HookPlan
 from messages import UserFacingError
 from runtime import run_text
@@ -29,13 +29,24 @@ BLACK_OUT_S = 0.4
 JOIN_FADE_S = 0.04
 
 
-def crop_x_expression(steps: list[tuple[float, float]]) -> str:
-    """ffmpeg expression for a crop position that changes at given times (seconds from the segment start)."""
+def crop_x_expression(steps: list[tuple]) -> str:
+    """ffmpeg expression for a crop position that changes at given times (seconds from the segment
+    start). A step (t, x) jumps to x at t (a camera cut hides the jump); a step (t, x, glide) moves
+    there smoothly over `glide` seconds from the position before it (following a person inside a shot)."""
     if len(steps) == 1:
         return f"(iw-1080)*{steps[0][1]:g}"
-    expr = f"{steps[-1][1]:g}"
-    for (_, cx), (t_next, _) in zip(reversed(steps[:-1]), reversed(steps[1:])):
-        expr = f"if(lt(t,{t_next:g}),{cx:g},{expr})"
+
+    def value(i: int) -> str:
+        t, x = steps[i][0], steps[i][1]
+        glide = steps[i][2] if len(steps[i]) > 2 else 0.0
+        if glide <= 0 or i == 0:
+            return f"{x:g}"
+        before = steps[i - 1][1]
+        return f"({before:g}+({x - before:g})*min(1,(t-{t:g})/{glide:g}))"
+
+    expr = value(len(steps) - 1)
+    for i in range(len(steps) - 2, -1, -1):
+        expr = f"if(lt(t,{steps[i + 1][0]:g}),{value(i)},{expr})"
     return f"(iw-1080)*{expr}"
 
 
@@ -295,8 +306,15 @@ def render_clip(
         seam += [(offset + iv[0], offset + iv[1]) for iv in (split[i] if split and i < len(split) else [])]
         offset += b - a
     ass_name = f"clip{index:02d}.ass"
+    edges = None
+    if PRESETS[preset].highlight:
+        try:
+            edges = measure_word_edges(blocks, preset, font, ws.path)
+        except Exception:  # no highlight is better than no clip
+            edges = None
     (ws.path / ass_name).write_text(
-        build_ass(blocks, preset=preset, font=font, title_text=plan.title_text, seam=seam), encoding="utf-8"
+        build_ass(blocks, preset=preset, font=font, title_text=plan.title_text, seam=seam, word_edges=edges),
+        encoding="utf-8",
     )
 
     out_name = f"out{index:02d}.mp4"

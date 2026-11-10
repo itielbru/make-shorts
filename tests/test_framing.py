@@ -27,7 +27,7 @@ def test_a_face_turned_to_the_right_sits_left_of_centre_with_room_ahead():
     lead = facecrop.lead_for(0.4)
     frac = facecrop.crop_fraction(0.47, ASPECT, lead=lead)
     assert _face_in_crop(0.47, frac) == pytest.approx(0.5 - facecrop.LEAD_ROOM, abs=0.01)
-    assert _face_in_crop(0.47, frac) < 0.4
+    assert _face_in_crop(0.47, frac) < 0.5
 
 
 def test_a_face_looking_into_the_camera_stays_centred():

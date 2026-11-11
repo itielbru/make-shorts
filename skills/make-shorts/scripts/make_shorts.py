@@ -985,6 +985,21 @@ def cmd_feedback(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_summary(args: argparse.Namespace) -> int:
+    """Quality across projects: with --project only that one, otherwise every registered project."""
+    if args.project:
+        projects = [Path(args.project)]
+    else:
+        projects = feedback.registered_projects(config.config_dir() / feedback.REGISTRY_NAME)
+        if not projects:
+            print("אין עדיין משוב על קליפים. אחרי שתראה קליפים, אשמור את דעתך עם הפקודה feedback.")
+            return 0
+    total = feedback.summarize(projects)
+    per_project = [(p.name or str(p), feedback.summarize([p])) for p in projects if p not in total.missing_projects]
+    print(feedback.summary_markdown(total, per_project), end="")
+    return 0
+
+
 def cmd_qa(args: argparse.Namespace) -> int:
     project = _project(args)
     state = ProjectState.load(project)
@@ -1194,6 +1209,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--category", help="קטגוריה, לפי הסוג")
     p.add_argument("--reason", help="במילים שלך: מה לא עבד")
     p.add_argument("--file", help="קובץ JSON עם רשימת פסקי דין (אותם שדות)")
+
+    add("summary", cmd_summary, help="סיכום איכות הקליפים לפי משוב, בכל הפרויקטים או בפרויקט אחד")
 
     p = add("qa", cmd_qa)
     p.add_argument("--clips")

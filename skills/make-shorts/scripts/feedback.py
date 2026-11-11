@@ -97,3 +97,73 @@ def register_project(project: Path, registry: Path) -> None:
         return
     registry.parent.mkdir(parents=True, exist_ok=True)
     registry.write_text(json.dumps(known + [path], ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
+
+
+@dataclass
+class Summary:
+    clips: int
+    approved: int
+    changed: int
+    rejected: int
+    technical: int
+    creative: int
+    by_category: dict[str, int]
+    missing_projects: list[Path]
+    skipped_lines: int
+
+
+def summarize(projects: list[Path]) -> Summary:
+    """Add up the latest verdict of every clip in the given projects. Technical and creative stay apart."""
+    s = Summary(0, 0, 0, 0, 0, 0, {}, [], 0)
+    for project in projects:
+        if not Path(project).is_dir():
+            s.missing_projects.append(project)
+            continue
+        verdicts, skipped = read_verdicts(project)
+        s.skipped_lines += skipped
+        for v in verdicts:
+            s.clips += 1
+            if v.outcome == "approved":
+                s.approved += 1
+                continue
+            if v.outcome == "changed":
+                s.changed += 1
+            else:
+                s.rejected += 1
+            if v.kind == "technical":
+                s.technical += 1
+            elif v.kind == "creative":
+                s.creative += 1
+            key = f"{v.kind}/{v.category}"
+            s.by_category[key] = s.by_category.get(key, 0) + 1
+    return s
+
+
+def _percent(part: int, whole: int) -> str:
+    return f"{round(100 * part / whole)}%" if whole else "אין נתונים"
+
+
+def summary_markdown(s: Summary, per_project: list[tuple[str, Summary]]) -> str:
+    lines = ["# סיכום איכות הקליפים", ""]
+    if not s.clips:
+        lines.append("- אושרו בלי תיקון: אין נתונים")
+    else:
+        lines.append(f"- אושרו בלי תיקון: {_percent(s.approved, s.clips)} ({s.approved} מתוך {s.clips} קליפים)")
+    lines.append(f"- תקלות טכניות: {s.technical}")
+    lines.append(f"- תיקונים יצירתיים: {s.creative}")
+    if s.by_category:
+        lines += ["", "## לפי קטגוריה"]
+        for key, n in sorted(s.by_category.items(), key=lambda kv: (-kv[1], kv[0])):
+            lines.append(f"- {key}: {n}")
+    if per_project:
+        lines += ["", "## לפי פרויקט"]
+        for name, p in per_project:
+            lines.append(f"- {name}: {p.clips} קליפים, אושרו {p.approved}, שונו {p.changed}, נדחו {p.rejected}")
+    notes = []
+    if s.missing_projects:
+        notes.append("פרויקטים שלא נמצאו: " + ", ".join(str(p) for p in s.missing_projects))
+    if s.skipped_lines:
+        notes.append(f"שורות שלא נקראו ודולגו: {s.skipped_lines}")
+    if notes:
+        lines += ["", "; ".join(notes)]
+    return "\n".join(lines) + "\n"

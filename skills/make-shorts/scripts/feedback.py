@@ -16,6 +16,27 @@ CATEGORIES = {
 }
 LOG_NAME = "feedback.jsonl"
 
+# Hebrew labels for display only; the data keeps the English keys.
+KIND_LABELS = {"technical": "טכני", "creative": "יצירתי"}
+CATEGORY_LABELS = {
+    "sync": "סנכרון", "frozen": "תמונה קפואה", "framing": "מסגור", "captions": "כתוביות", "cut": "חיתוך",
+    "audio": "אודיו", "other": "אחר",
+    "start": "פתיחה", "end": "סיום", "moment": "בחירת הרגע", "length": "אורך", "pacing": "קצב", "hook": "הוק",
+}
+
+
+def category_label(category: str | None, kind: str | None = None) -> str:
+    label = CATEGORY_LABELS.get(category or "", category or "")
+    return f"{KIND_LABELS.get(kind or '', kind)}: {label}" if kind else label
+
+
+def count_projects(n: int) -> str:
+    return "פרויקט אחד" if n == 1 else f"{n} פרויקטים"
+
+
+def count_clips(n: int) -> str:
+    return "קליפ אחד" if n == 1 else f"{n} קליפים"
+
 
 @dataclass
 class Verdict:
@@ -51,8 +72,15 @@ def append_verdict(project: Path, v: Verdict) -> None:
         v.at = datetime.now().isoformat(timespec="seconds")
     project = Path(project)
     project.mkdir(parents=True, exist_ok=True)
-    with (project / LOG_NAME).open("a", encoding="utf-8") as f:
-        f.write(json.dumps(asdict(v), ensure_ascii=False) + "\n")
+    path = project / LOG_NAME
+    line = json.dumps(asdict(v), ensure_ascii=False) + "\n"
+    if path.exists() and path.stat().st_size:
+        with path.open("rb") as f:  # a torn last line must not swallow this verdict
+            f.seek(-1, 2)
+            if f.read(1) != b"\n":
+                line = "\n" + line
+    with path.open("a", encoding="utf-8") as f:
+        f.write(line)
 
 
 def read_verdicts(project: Path) -> tuple[list[Verdict], int]:
@@ -79,14 +107,17 @@ REGISTRY_NAME = "projects.json"
 
 
 def registered_projects(registry: Path) -> list[Path]:
-    """Projects that have recorded verdicts. A missing or unreadable registry is an empty list."""
+    """Projects that have recorded verdicts. A missing registry is empty; a corrupt one is an error, never rewritten."""
+    registry = Path(registry)
+    if not registry.exists():
+        return []
     try:
-        data = json.loads(Path(registry).read_text(encoding="utf-8"))
+        data = json.loads(registry.read_text(encoding="utf-8"))
+        if not isinstance(data, list) or not all(isinstance(p, str) for p in data):
+            raise ValueError("not a list of strings")
     except (OSError, ValueError):
-        return []
-    if not isinstance(data, list):
-        return []
-    return [Path(p) for p in data if isinstance(p, str)]
+        raise UserFacingError("bad_feedback", reason=f"רשימת הפרויקטים {registry} פגומה ולא נקראה. לא שיניתי אותה") from None
+    return [Path(p) for p in data]
 
 
 def register_project(project: Path, registry: Path) -> None:
@@ -148,17 +179,18 @@ def summary_markdown(s: Summary, per_project: list[tuple[str, Summary]]) -> str:
     if not s.clips:
         lines.append("- אושרו בלי תיקון: אין נתונים")
     else:
-        lines.append(f"- אושרו בלי תיקון: {_percent(s.approved, s.clips)} ({s.approved} מתוך {s.clips} קליפים)")
+        lines.append(f"- אושרו בלי תיקון: {_percent(s.approved, s.clips)} ({s.approved} מתוך {count_clips(s.clips)})")
     lines.append(f"- תקלות טכניות: {s.technical}")
     lines.append(f"- תיקונים יצירתיים: {s.creative}")
     if s.by_category:
         lines += ["", "## לפי קטגוריה"]
         for key, n in sorted(s.by_category.items(), key=lambda kv: (-kv[1], kv[0])):
-            lines.append(f"- {key}: {n}")
+            kind, _, category = key.partition("/")
+            lines.append(f"- {category_label(category, kind)}: {n}")
     if per_project:
         lines += ["", "## לפי פרויקט"]
         for name, p in per_project:
-            lines.append(f"- {name}: {p.clips} קליפים, אושרו {p.approved}, שונו {p.changed}, נדחו {p.rejected}")
+            lines.append(f"- {name}: {count_clips(p.clips)}, אושרו {p.approved}, שונו {p.changed}, נדחו {p.rejected}")
     notes = []
     if s.missing_projects:
         notes.append("פרויקטים שלא נמצאו: " + ", ".join(str(p) for p in s.missing_projects))
@@ -200,7 +232,7 @@ def load_lessons(store: Path) -> list[Lesson]:
             raise ValueError("not a list")
         return [Lesson(**item) for item in raw]
     except (OSError, ValueError, TypeError):
-        raise UserFacingError("bad_feedback", reason=f"קובץ הלקחים {store} פגום ולא נקרא. לא שיניתי אותו") from None
+        raise UserFacingError("bad_lesson", reason=f"קובץ הלקחים {store} פגום ולא נקרא. לא שיניתי אותו") from None
 
 
 def save_lessons(store: Path, lessons: list[Lesson]) -> None:
@@ -214,26 +246,29 @@ def _lesson_number(lesson_id: str) -> int:
     return int(digits) if lesson_id.startswith("L") and digits.isdigit() else 0
 
 
-def record_lesson(store: Path, text: str, type: str, category: str, project: Path,
+def record_lesson(store: Path, text: str, type: str, category: str, project: Path | None,
                   lesson_id: str | None = None, confirm: bool = False) -> Lesson:
+    """Add a lesson or evidence for one. With project=None (confirm only) no project is added as evidence."""
     def bad(reason: str) -> UserFacingError:
-        return UserFacingError("bad_feedback", reason=reason)
+        return UserFacingError("bad_lesson", reason=reason)
 
     if type and type not in LESSON_TYPES:
         raise bad("סוג הלקח חייב להיות אחד מ: " + ", ".join(LESSON_TYPES))
     if category and category not in _ALL_CATEGORIES:
         raise bad("קטגוריה לא מוכרת, האפשרויות: " + ", ".join(_ALL_CATEGORIES))
     lessons = load_lessons(store)
-    path = str(Path(project).resolve())
+    path = str(Path(project).resolve()) if project is not None else None
     if lesson_id is not None:
         lesson = next((x for x in lessons if x.id == lesson_id), None)
         if lesson is None:
             raise bad(f"אין לקח עם המזהה {lesson_id}")
-        if path not in lesson.projects:
+        if path is not None and path not in lesson.projects:
             lesson.projects.append(path)
         if confirm:
             lesson.confirmed = True
     else:
+        if path is None:
+            raise bad("לקח חדש צריך פרויקט")
         if not type or not category:
             raise bad("לקח חדש צריך סוג וקטגוריה")
         if not text or not text.strip():
@@ -249,5 +284,5 @@ def drop_lesson(store: Path, lesson_id: str) -> None:
     lessons = load_lessons(store)
     kept = [x for x in lessons if x.id != lesson_id]
     if len(kept) == len(lessons):
-        raise UserFacingError("bad_feedback", reason=f"אין לקח עם המזהה {lesson_id}")
+        raise UserFacingError("bad_lesson", reason=f"אין לקח עם המזהה {lesson_id}")
     save_lessons(store, kept)

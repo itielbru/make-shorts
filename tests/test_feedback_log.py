@@ -62,13 +62,11 @@ def test_feedback_records_and_registers_the_project(tmp_path, monkeypatch):
     assert feedback.registered_projects(tmp_path / "cfg" / "projects.json") == [tmp_path.resolve()]
 
 
-def test_registering_twice_lists_the_project_once_and_corrupt_registry_is_empty(tmp_path):
+def test_registering_twice_lists_the_project_once(tmp_path):
     reg = tmp_path / "sub" / "projects.json"
     feedback.register_project(tmp_path, reg)
     feedback.register_project(tmp_path, reg)
     assert feedback.registered_projects(reg) == [tmp_path.resolve()]
-    reg.write_text("{oops", encoding="utf-8")
-    assert feedback.registered_projects(reg) == []
     assert feedback.registered_projects(tmp_path / "none.json") == []
 
 
@@ -101,3 +99,36 @@ def test_feedback_needs_exactly_one_input_mode(tmp_path, monkeypatch):
     assert make_shorts.main(["feedback", "--project", str(tmp_path), "--clip", "1"]) == 2
     f.write_text("not json", encoding="utf-8")
     assert make_shorts.main(["feedback", "--project", str(tmp_path), "--file", str(f)]) == 2
+
+
+def test_a_torn_last_line_does_not_swallow_the_next_verdict(tmp_path):
+    (tmp_path / "feedback.jsonl").write_text('{"clip": 1, "outc', encoding="utf-8")
+    feedback.append_verdict(tmp_path, Verdict(2, "approved"))
+    verdicts, skipped = feedback.read_verdicts(tmp_path)
+    assert [v.clip for v in verdicts] == [2] and skipped == 1
+
+
+def test_a_corrupt_registry_is_never_overwritten(tmp_path, monkeypatch, capsys):
+    _project(tmp_path, monkeypatch)
+    reg = tmp_path / "cfg" / "projects.json"
+    reg.parent.mkdir()
+    for content in (b"{oops", b'{"a": 1}', b"[1, 2]"):
+        reg.write_bytes(content)
+        with pytest.raises(UserFacingError):
+            feedback.registered_projects(reg)
+        with pytest.raises(UserFacingError):
+            feedback.register_project(tmp_path, reg)
+        assert reg.read_bytes() == content
+    reg.write_bytes(b"{oops")
+    assert make_shorts.main(["feedback", "--project", str(tmp_path), "--clip", "1", "--outcome", "approved"]) == 2
+    assert reg.read_bytes() == b"{oops" and "המשוב לא תקין" in capsys.readouterr().err
+
+
+def test_feedback_output_is_hebrew_and_names_changed_consistently(tmp_path, monkeypatch, capsys):
+    _project(tmp_path, monkeypatch)
+    assert make_shorts.main(["feedback", "--project", str(tmp_path), "--clip", "1", "--outcome", "changed",
+                             "--kind", "creative", "--category", "end"]) == 0
+    out = capsys.readouterr().out
+    assert "פורסם אחרי תיקון" in out and "creative" not in out and "end" not in out and "סיום" in out
+    assert make_shorts.main(["feedback", "--project", str(tmp_path), "--clip", "1"]) == 2
+    assert "צריך גם --clip וגם --outcome, או --file" in capsys.readouterr().err

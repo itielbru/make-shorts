@@ -965,7 +965,7 @@ def cmd_feedback(args: argparse.Namespace) -> int:
     elif args.clip is not None and args.outcome is not None:
         verdicts = [feedback.Verdict(args.clip, args.outcome, args.kind, args.category, args.reason or "")]
     else:
-        raise UserFacingError("bad_feedback", reason="צריך --clip ו---outcome, או --file")
+        raise UserFacingError("bad_feedback", reason="צריך גם --clip וגם --outcome, או --file")
     if not verdicts:
         raise UserFacingError("bad_feedback", reason="אין פסקי דין לרשום")
     for v in verdicts:  # check everything before writing anything
@@ -975,10 +975,10 @@ def cmd_feedback(args: argparse.Namespace) -> int:
     for v in verdicts:
         feedback.append_verdict(project, v)
     feedback.register_project(project, config.config_dir() / feedback.REGISTRY_NAME)
-    names = {"approved": "אושר", "changed": "דורש שינוי", "rejected": "נדחה"}
+    names = {"approved": "אושר", "changed": "פורסם אחרי תיקון", "rejected": "נדחה"}
     report = Report("משוב נרשם")
     for v in verdicts:
-        detail = f" ({v.kind}/{v.category})" if v.kind else ""
+        detail = f" ({feedback.category_label(v.category, v.kind)})" if v.kind else ""
         reason = f": {v.reason}" if v.reason else ""
         report.bullet(f"קליפ {v.clip}: {names[v.outcome]}{detail}{reason}")
     print(report.markdown())
@@ -1000,21 +1000,33 @@ def cmd_summary(args: argparse.Namespace) -> int:
     return 0
 
 
+def _lesson_project(args: argparse.Namespace) -> Path:
+    """The project a lesson's evidence comes from: it must be a real, processed project."""
+    if not args.project:
+        raise UserFacingError("bad_lesson", reason="צריך --project עם תיקיית הפרויקט כדי לרשום ראיה")
+    project = Path(args.project)
+    if not (project / STATE_FILE).is_file():
+        raise UserFacingError("bad_lesson", reason=f"התיקייה {project} היא לא פרויקט של make-shorts")
+    return project
+
+
 def cmd_lessons(args: argparse.Namespace) -> int:
     """List learned lessons (rules first), add evidence for one, or drop one."""
     store = config.config_dir() / feedback.LESSONS_NAME
     if args.drop:
         if args.add or args.id or args.confirm:
-            raise UserFacingError("bad_feedback", reason="--drop לא מתחבר עם --add, --id או --confirm")
+            raise UserFacingError("bad_lesson", reason="--drop לא מתחבר עם --add, --id או --confirm")
         feedback.drop_lesson(store, args.drop)
         print(f"הלקח {args.drop} נמחק")
         return 0
     if args.add is not None or args.id:
         if args.add and args.id:
-            raise UserFacingError("bad_feedback", reason="אפשר לתת טקסט חדש או --id של לקח קיים, לא את שניהם")
+            raise UserFacingError("bad_lesson", reason="אפשר לתת טקסט חדש או --id של לקח קיים, לא את שניהם")
+        confirm_only = bool(args.id) and args.confirm and not args.project
+        project = None if confirm_only else _lesson_project(args)
         lesson = feedback.record_lesson(store, args.add or "", args.type or "", args.category or "",
-                                        _project(args), lesson_id=args.id, confirm=args.confirm)
-        state = "כלל" if lesson.is_rule else f"מועמד ({len(set(lesson.projects))} פרויקטים)"
+                                        project, lesson_id=args.id, confirm=args.confirm)
+        state = "כלל" if lesson.is_rule else f"מועמד ({feedback.count_projects(len(set(lesson.projects)))})"
         print(f"{lesson.id}: {lesson.text} ({state})")
         return 0
     lessons = feedback.load_lessons(store)
@@ -1024,8 +1036,8 @@ def cmd_lessons(args: argparse.Namespace) -> int:
     report = Report("לקחים")
     rules = [x for x in lessons if x.is_rule]
     for title, kind in (("העדפות סגנון", "style"), ("עקרונות עריכה", "principle")):
-        report.section(title, [f"- {x.id}: {x.text} ({x.category})" for x in rules if x.type == kind] or ["- אין"])
-    candidates = [f"- {x.id}: {x.text} ({x.category}, {len(set(x.projects))} פרויקטים)" for x in lessons if not x.is_rule]
+        report.section(title, [f"- {x.id}: {x.text} ({feedback.category_label(x.category)})" for x in rules if x.type == kind] or ["- אין"])
+    candidates = [f"- {x.id}: {x.text} ({feedback.category_label(x.category)}, {feedback.count_projects(len(set(x.projects)))})" for x in lessons if not x.is_rule]
     report.section("מועמדים", candidates or ["- אין"])
     print(report.markdown())
     return 0

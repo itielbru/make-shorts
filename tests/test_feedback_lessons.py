@@ -77,6 +77,13 @@ def _setup(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "config_dir", lambda: tmp_path / "cfg")
 
 
+def _real_project(tmp_path, name):
+    p = tmp_path / name
+    p.mkdir()
+    (p / "process_config.json").write_text("{}", encoding="utf-8")
+    return p
+
+
 def test_lessons_command_with_no_store_says_none_yet(tmp_path, monkeypatch, capsys):
     _setup(tmp_path, monkeypatch)
     assert make_shorts.main(["lessons"]) == 0
@@ -85,17 +92,19 @@ def test_lessons_command_with_no_store_says_none_yet(tmp_path, monkeypatch, caps
 
 def test_lessons_command_lists_rules_in_two_lists_then_candidates(tmp_path, monkeypatch, capsys):
     _setup(tmp_path, monkeypatch)
+    a, b = _real_project(tmp_path, "a"), _real_project(tmp_path, "b")
     assert make_shorts.main(["lessons", "--add", "כתוביות עבות", "--type", "style", "--category", "captions",
-                             "--project", str(tmp_path / "a"), "--confirm"]) == 0
+                             "--project", str(a), "--confirm"]) == 0
     assert make_shorts.main(["lessons", "--add", "לפתוח בשאלה", "--type", "principle", "--category", "start",
-                             "--project", str(tmp_path / "a")]) == 0
+                             "--project", str(a)]) == 0
     capsys.readouterr()
     assert make_shorts.main(["lessons"]) == 0
     out = capsys.readouterr().out
     assert out.index("העדפות סגנון") < out.index("כתוביות עבות") < out.index("עקרונות עריכה") < out.index("מועמדים")
     assert out.index("מועמדים") < out.index("לפתוח בשאלה")
-    assert "1 פרויקטים" in out
-    assert make_shorts.main(["lessons", "--id", "L2", "--project", str(tmp_path / "b")]) == 0
+    assert "פרויקט אחד" in out and "1 פרויקטים" not in out
+    assert "start" not in out and "captions" not in out and "פתיחה" in out
+    assert make_shorts.main(["lessons", "--id", "L2", "--project", str(b)]) == 0
     capsys.readouterr()
     make_shorts.main(["lessons"])
     out = capsys.readouterr().out
@@ -104,8 +113,48 @@ def test_lessons_command_lists_rules_in_two_lists_then_candidates(tmp_path, monk
 
 def test_lessons_command_drop_and_unknown_id(tmp_path, monkeypatch, capsys):
     _setup(tmp_path, monkeypatch)
-    make_shorts.main(["lessons", "--add", "x", "--type", "style", "--category", "other"])
+    a = _real_project(tmp_path, "a")
+    make_shorts.main(["lessons", "--add", "x", "--type", "style", "--category", "other", "--project", str(a)])
     assert make_shorts.main(["lessons", "--drop", "L1"]) == 0
     assert feedback.load_lessons(tmp_path / "cfg" / feedback.LESSONS_NAME) == []
     assert make_shorts.main(["lessons", "--drop", "L1"]) == 2
     assert make_shorts.main(["lessons", "--id", "L7", "--confirm"]) == 2
+
+
+def test_lessons_add_needs_an_existing_project(tmp_path, monkeypatch, capsys):
+    _setup(tmp_path, monkeypatch)
+    store = tmp_path / "cfg" / feedback.LESSONS_NAME
+    base = ["lessons", "--add", "x", "--type", "style", "--category", "other"]
+    assert make_shorts.main(base) == 2
+    assert make_shorts.main(base + ["--project", str(tmp_path / "nope")]) == 2
+    (tmp_path / "empty").mkdir()
+    assert make_shorts.main(base + ["--project", str(tmp_path / "empty")]) == 2
+    assert not store.exists()
+    assert "הלקח לא תקין" in capsys.readouterr().err
+
+
+def test_confirm_only_adds_no_project_and_evidence_needs_a_real_one(tmp_path, monkeypatch):
+    _setup(tmp_path, monkeypatch)
+    store = tmp_path / "cfg" / feedback.LESSONS_NAME
+    a = _real_project(tmp_path, "a")
+    make_shorts.main(["lessons", "--add", "x", "--type", "style", "--category", "other", "--project", str(a)])
+    assert make_shorts.main(["lessons", "--id", "L1", "--confirm"]) == 0
+    got = feedback.load_lessons(store)[0]
+    assert got.confirmed and len(got.projects) == 1
+    assert make_shorts.main(["lessons", "--id", "L1"]) == 2
+    assert make_shorts.main(["lessons", "--id", "L1", "--project", str(tmp_path / "ghost")]) == 2
+    assert len(feedback.load_lessons(store)[0].projects) == 1
+
+
+def test_lesson_errors_use_the_lesson_wording(tmp_path):
+    with pytest.raises(UserFacingError) as e:
+        feedback.record_lesson(tmp_path / "s.json", "t", "bad", "other", tmp_path)
+    assert e.value.message_he.startswith("הלקח לא תקין")
+    with pytest.raises(UserFacingError) as e:
+        feedback.drop_lesson(tmp_path / "s.json", "L9")
+    assert e.value.message_he.startswith("הלקח לא תקין")
+
+
+def test_hebrew_counts():
+    assert feedback.count_projects(1) == "פרויקט אחד" and feedback.count_projects(3) == "3 פרויקטים"
+    assert feedback.count_clips(1) == "קליפ אחד" and feedback.count_clips(2) == "2 קליפים"

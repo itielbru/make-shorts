@@ -115,3 +115,16 @@ def test_skill_md_explains_the_json_fields_and_commands_claude_depends_on():
     text = skill_text()
     for needed in ("url_input_ready", "profile_exists", "correct", "winget upgrade --id yt-dlp.yt-dlp", "--force"):
         assert needed in text, needed
+
+
+def test_verdict_step_defines_outcomes_categories_and_order():
+    import feedback
+    step = next(line for line in skill_text().splitlines() if line.startswith("11."))
+    for word in ("changed", "rejected", "approved", "--file", "clip", "outcome", "kind", "category", "reason"):
+        assert word in step
+    for cats in feedback.CATEGORIES.values():
+        for cat in cats:
+            assert cat in step
+    assert "פורסם אחרי תיקון" not in step or "changed" in step
+    assert step.index("איפה הקליפים") < step.index("אילו קליפים")
+    assert "לא רושמים" in step and "תיקון באותה שיחה" in step

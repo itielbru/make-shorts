@@ -33,13 +33,18 @@ def test_summary_markdown_shows_the_rate_without_fix_in_hebrew():
     s = feedback.Summary(4, 3, 1, 0, 1, 0, {"technical/sync": 1}, [], 0)
     text = feedback.summary_markdown(s, [])
     assert "75%" in text and "אושרו בלי תיקון" in text
+    solo = feedback.Summary(1, 1, 0, 0, 0, 0, {}, [], 0)
+    one = feedback.summary_markdown(solo, [("p", solo)])
+    assert "(1 מתוך קליפ אחד)" in one and "קליפ אחד," in one and "1 קליפים" not in one
 
 
 def test_summary_markdown_orders_categories_projects_and_notes(tmp_path):
     s = feedback.Summary(5, 1, 3, 1, 2, 2, {"creative/end": 3, "technical/sync": 1}, [tmp_path / "gone"], 2)
     one = feedback.Summary(5, 1, 3, 1, 2, 2, {}, [], 0)
     text = feedback.summary_markdown(s, [("proj1", one)])
-    assert text.index("creative/end") < text.index("technical/sync")
+    assert text.index("יצירתי: סיום") < text.index("טכני: סנכרון")
+    assert "creative" not in text and "technical" not in text and "end" not in text
+    assert "(1 מתוך 5 קליפים)" in text
     assert "proj1" in text and "gone" in text and "2" in text
     assert "תקלות טכניות" in text and "תיקונים יצירתיים" in text
 

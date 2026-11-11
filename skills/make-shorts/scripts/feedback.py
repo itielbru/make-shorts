@@ -167,3 +167,87 @@ def summary_markdown(s: Summary, per_project: list[tuple[str, Summary]]) -> str:
     if notes:
         lines += ["", "; ".join(notes)]
     return "\n".join(lines) + "\n"
+
+
+LESSON_TYPES = ("style", "principle")
+RULE_MIN_PROJECTS = 2
+LESSONS_NAME = "lessons.json"
+_ALL_CATEGORIES = tuple(dict.fromkeys(c for cats in CATEGORIES.values() for c in cats))
+
+
+@dataclass
+class Lesson:
+    id: str
+    text: str
+    type: str
+    category: str
+    projects: list[str]
+    confirmed: bool = False
+
+    @property
+    def is_rule(self) -> bool:
+        return self.confirmed or len(set(self.projects)) >= RULE_MIN_PROJECTS
+
+
+def load_lessons(store: Path) -> list[Lesson]:
+    """A missing store is an empty list; a corrupt one is an error, so learned rules are never dropped silently."""
+    store = Path(store)
+    if not store.exists():
+        return []
+    try:
+        raw = json.loads(store.read_text(encoding="utf-8"))
+        if not isinstance(raw, list):
+            raise ValueError("not a list")
+        return [Lesson(**item) for item in raw]
+    except (OSError, ValueError, TypeError):
+        raise UserFacingError("bad_feedback", reason=f"קובץ הלקחים {store} פגום ולא נקרא. לא שיניתי אותו") from None
+
+
+def save_lessons(store: Path, lessons: list[Lesson]) -> None:
+    store = Path(store)
+    store.parent.mkdir(parents=True, exist_ok=True)
+    store.write_text(json.dumps([asdict(x) for x in lessons], ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
+
+
+def _lesson_number(lesson_id: str) -> int:
+    digits = lesson_id[1:]
+    return int(digits) if lesson_id.startswith("L") and digits.isdigit() else 0
+
+
+def record_lesson(store: Path, text: str, type: str, category: str, project: Path,
+                  lesson_id: str | None = None, confirm: bool = False) -> Lesson:
+    def bad(reason: str) -> UserFacingError:
+        return UserFacingError("bad_feedback", reason=reason)
+
+    if type and type not in LESSON_TYPES:
+        raise bad("סוג הלקח חייב להיות אחד מ: " + ", ".join(LESSON_TYPES))
+    if category and category not in _ALL_CATEGORIES:
+        raise bad("קטגוריה לא מוכרת, האפשרויות: " + ", ".join(_ALL_CATEGORIES))
+    lessons = load_lessons(store)
+    path = str(Path(project).resolve())
+    if lesson_id is not None:
+        lesson = next((x for x in lessons if x.id == lesson_id), None)
+        if lesson is None:
+            raise bad(f"אין לקח עם המזהה {lesson_id}")
+        if path not in lesson.projects:
+            lesson.projects.append(path)
+        if confirm:
+            lesson.confirmed = True
+    else:
+        if not type or not category:
+            raise bad("לקח חדש צריך סוג וקטגוריה")
+        if not text or not text.strip():
+            raise bad("לקח חדש צריך טקסט")
+        n = 1 + max((_lesson_number(x.id) for x in lessons), default=0)
+        lesson = Lesson(f"L{n}", text.strip(), type, category, [path], confirm)
+        lessons.append(lesson)
+    save_lessons(store, lessons)
+    return lesson
+
+
+def drop_lesson(store: Path, lesson_id: str) -> None:
+    lessons = load_lessons(store)
+    kept = [x for x in lessons if x.id != lesson_id]
+    if len(kept) == len(lessons):
+        raise UserFacingError("bad_feedback", reason=f"אין לקח עם המזהה {lesson_id}")
+    save_lessons(store, kept)

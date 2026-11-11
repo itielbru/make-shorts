@@ -29,7 +29,7 @@ metadata:
 - בחר תיקיית פרויקט אחת לכל סרטון, ליד הסרטון (למשל `make-shorts-<שם הסרטון>`). למקור מקישור אין "ליד": השתמש ב-`Documents\make-shorts-<שם קצר>`, או שאל את המשתמש איפה לשמור. השתמש באותה תיקייה לאורך כל הסשן. בה נשמרים התמלול, הקטעים והקליפים.
 - ב-Windows הפקודה `python` היא לפעמים רק קיצור לחנות. ראה `references/windows-setup.md` איך מוצאים Python אמיתי.
 - מוסיפים תמיד את הנתיבים במרכאות, כי הם יכולים להכיל עברית ורווחים.
-- הפקודות: `setup`, `ingest`, `transcribe`, `windows`, `refine`, `correct`, `render`, `recaption`, `qa`, `feedback`, `summary`, `diagnose`, `cleanup`. כל פקודה מדפיסה דוח Markdown לפלט, והתקדמות והודעות שגיאה לערוץ השגיאות (stderr).
+- הפקודות: `setup`, `ingest`, `transcribe`, `windows`, `refine`, `correct`, `render`, `recaption`, `qa`, `feedback`, `summary`, `lessons`, `diagnose`, `cleanup`. כל פקודה מדפיסה דוח Markdown לפלט, והתקדמות והודעות שגיאה לערוץ השגיאות (stderr).
 
 ### קודי יציאה
 | קוד | משמעות | מה עושים |

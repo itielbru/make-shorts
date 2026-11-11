@@ -1000,6 +1000,37 @@ def cmd_summary(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_lessons(args: argparse.Namespace) -> int:
+    """List learned lessons (rules first), add evidence for one, or drop one."""
+    store = config.config_dir() / feedback.LESSONS_NAME
+    if args.drop:
+        if args.add or args.id or args.confirm:
+            raise UserFacingError("bad_feedback", reason="--drop לא מתחבר עם --add, --id או --confirm")
+        feedback.drop_lesson(store, args.drop)
+        print(f"הלקח {args.drop} נמחק")
+        return 0
+    if args.add is not None or args.id:
+        if args.add and args.id:
+            raise UserFacingError("bad_feedback", reason="אפשר לתת טקסט חדש או --id של לקח קיים, לא את שניהם")
+        lesson = feedback.record_lesson(store, args.add or "", args.type or "", args.category or "",
+                                        _project(args), lesson_id=args.id, confirm=args.confirm)
+        state = "כלל" if lesson.is_rule else f"מועמד ({len(set(lesson.projects))} פרויקטים)"
+        print(f"{lesson.id}: {lesson.text} ({state})")
+        return 0
+    lessons = feedback.load_lessons(store)
+    if not lessons:
+        print("אין עדיין לקחים.")
+        return 0
+    report = Report("לקחים")
+    rules = [x for x in lessons if x.is_rule]
+    for title, kind in (("העדפות סגנון", "style"), ("עקרונות עריכה", "principle")):
+        report.section(title, [f"- {x.id}: {x.text} ({x.category})" for x in rules if x.type == kind] or ["- אין"])
+    candidates = [f"- {x.id}: {x.text} ({x.category}, {len(set(x.projects))} פרויקטים)" for x in lessons if not x.is_rule]
+    report.section("מועמדים", candidates or ["- אין"])
+    print(report.markdown())
+    return 0
+
+
 def cmd_qa(args: argparse.Namespace) -> int:
     project = _project(args)
     state = ProjectState.load(project)
@@ -1211,6 +1242,14 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--file", help="קובץ JSON עם רשימת פסקי דין (אותם שדות)")
 
     add("summary", cmd_summary, help="סיכום איכות הקליפים לפי משוב, בכל הפרויקטים או בפרויקט אחד")
+
+    p = add("lessons", cmd_lessons, help="לקחים שנלמדו ממשוב: רשימה, הוספה או מחיקה")
+    p.add_argument("--add", help="טקסט של לקח חדש")
+    p.add_argument("--type", choices=feedback.LESSON_TYPES, help="style (העדפה) או principle (עיקרון עריכה)")
+    p.add_argument("--category", help="קטגוריה")
+    p.add_argument("--id", help="מזהה של לקח קיים להוספת ראיה, למשל L3")
+    p.add_argument("--confirm", action="store_true", help="לאשר את הלקח ככלל מיד")
+    p.add_argument("--drop", help="מזהה של לקח למחיקה")
 
     p = add("qa", cmd_qa)
     p.add_argument("--clips")

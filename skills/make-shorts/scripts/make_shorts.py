@@ -24,6 +24,7 @@ import captions
 import clipplan
 import config
 import engines
+import feedback
 import facecrop
 import qa
 import render
@@ -943,6 +944,47 @@ def _load_clip_words(project: Path, clip_id: int, segments, fallback_segments=No
     return words
 
 
+def cmd_feedback(args: argparse.Namespace) -> int:
+    """Record the user's verdict on rendered clips in the project's decision log."""
+    project = _project(args)
+    state = ProjectState.load(project)
+    single = args.clip is not None or args.outcome is not None
+    if args.file and single:
+        raise UserFacingError("bad_feedback", reason="אפשר לתת --file או --clip עם --outcome, לא את שניהם")
+    if args.file:
+        try:
+            raw = json.loads(Path(args.file).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            raise UserFacingError("bad_feedback", reason="אי אפשר לקרוא את קובץ המשוב (צריך רשימת JSON)") from None
+        if not isinstance(raw, list) or not all(isinstance(x, dict) for x in raw):
+            raise UserFacingError("bad_feedback", reason="הקובץ צריך להכיל רשימה של אובייקטים")
+        try:
+            verdicts = [feedback.Verdict(**x) for x in raw]
+        except TypeError:
+            raise UserFacingError("bad_feedback", reason="שדות לא מוכרים או חסרים בקובץ המשוב") from None
+    elif args.clip is not None and args.outcome is not None:
+        verdicts = [feedback.Verdict(args.clip, args.outcome, args.kind, args.category, args.reason or "")]
+    else:
+        raise UserFacingError("bad_feedback", reason="צריך --clip ו---outcome, או --file")
+    if not verdicts:
+        raise UserFacingError("bad_feedback", reason="אין פסקי דין לרשום")
+    for v in verdicts:  # check everything before writing anything
+        feedback.validate_verdict(v)
+        if str(v.clip) not in state.rendered:
+            raise UserFacingError("bad_feedback", reason=f"קליפ {v.clip} לא רונדר בפרויקט הזה")
+    for v in verdicts:
+        feedback.append_verdict(project, v)
+    feedback.register_project(project, config.config_dir() / feedback.REGISTRY_NAME)
+    names = {"approved": "אושר", "changed": "דורש שינוי", "rejected": "נדחה"}
+    report = Report("משוב נרשם")
+    for v in verdicts:
+        detail = f" ({v.kind}/{v.category})" if v.kind else ""
+        reason = f": {v.reason}" if v.reason else ""
+        report.bullet(f"קליפ {v.clip}: {names[v.outcome]}{detail}{reason}")
+    print(report.markdown())
+    return 0
+
+
 def cmd_qa(args: argparse.Namespace) -> int:
     project = _project(args)
     state = ProjectState.load(project)
@@ -1144,6 +1186,14 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--clips")
     p.add_argument("--prompt", help="קובץ טקסט עם שמות והקשר שנשלחים כרמז לתמלול")
     p.add_argument("--glossary", help='קובץ JSON {"שגוי": "נכון"} שמוחל על התמלול החדש')
+
+    p = add("feedback", cmd_feedback)
+    p.add_argument("--clip", type=int, help="מספר הקליפ")
+    p.add_argument("--outcome", choices=feedback.OUTCOMES, help="approved / changed / rejected")
+    p.add_argument("--kind", choices=feedback.KINDS)
+    p.add_argument("--category", help="קטגוריה, לפי הסוג")
+    p.add_argument("--reason", help="במילים שלך: מה לא עבד")
+    p.add_argument("--file", help="קובץ JSON עם רשימת פסקי דין (אותם שדות)")
 
     p = add("qa", cmd_qa)
     p.add_argument("--clips")

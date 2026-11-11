@@ -73,3 +73,27 @@ def read_verdicts(project: Path) -> tuple[list[Verdict], int]:
             continue
         latest[v.clip] = v
     return [latest[c] for c in sorted(latest)], skipped
+
+
+REGISTRY_NAME = "projects.json"
+
+
+def registered_projects(registry: Path) -> list[Path]:
+    """Projects that have recorded verdicts. A missing or unreadable registry is an empty list."""
+    try:
+        data = json.loads(Path(registry).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    if not isinstance(data, list):
+        return []
+    return [Path(p) for p in data if isinstance(p, str)]
+
+
+def register_project(project: Path, registry: Path) -> None:
+    registry = Path(registry)
+    path = str(Path(project).resolve())
+    known = [str(p) for p in registered_projects(registry)]
+    if path in known:
+        return
+    registry.parent.mkdir(parents=True, exist_ok=True)
+    registry.write_text(json.dumps(known + [path], ensure_ascii=False, indent=1) + "\n", encoding="utf-8")

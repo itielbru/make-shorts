@@ -444,3 +444,10 @@ def test_setup_json_says_whether_a_profile_exists(config_home, monkeypatch, caps
     assert json.loads(run(capsys, "setup", "--json", "--skip-selftest")[1])["profile_exists"] is False
     profile_ready()
     assert json.loads(run(capsys, "setup", "--json", "--skip-selftest")[1])["profile_exists"] is True
+
+
+def test_parser_knows_the_measurement_commands():
+    p = make_shorts.build_parser()
+    assert p.parse_args(["summary"]).command == "summary"
+    assert p.parse_args(["lessons", "--drop", "L1"]).drop == "L1"
+    assert p.parse_args(["feedback", "--clip", "1", "--outcome", "approved"]).outcome == "approved"
